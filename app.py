@@ -541,28 +541,33 @@ with st.container(border=True):
 
         st.markdown('<div class="card-title" style="margin-top:14px;">📊 Results</div>', unsafe_allow_html=True)
 
-        if uploaded_csv is not None:
-            df_csv = pd.read_csv(uploaded_csv)
-            scored_df, summary = score_reviews_dataframe(df_csv)
-            st.session_state.scored_table = scored_df
-            st.session_state.scored_summary = summary
-        elif analyze_clicked:
-            lines = [line.strip() for line in pasted_text.splitlines() if line.strip()]
-            if lines:
-                df_input = pd.DataFrame({"review_text": lines})
-                scored_df, summary = score_reviews_dataframe(df_input)
+        if analyze_clicked:
+            if uploaded_csv is not None:
+                df_csv = pd.read_csv(uploaded_csv)
+                scored_df, summary = score_reviews_dataframe(df_csv)
                 st.session_state.scored_table = scored_df
                 st.session_state.scored_summary = summary
             else:
-                st.warning("Paste at least one review line or upload a CSV file to see predictions.")
+                lines = [line.strip() for line in pasted_text.splitlines() if line.strip()]
+                if lines:
+                    df_input = pd.DataFrame({"review_text": lines})
+                    scored_df, summary = score_reviews_dataframe(df_input)
+                    st.session_state.scored_table = scored_df
+                    st.session_state.scored_summary = summary
+                else:
+                    st.session_state.scored_table = None
+                    st.session_state.scored_summary = None
+                    st.warning("Paste at least one review line or upload a CSV file to see predictions.")
+        elif not st.session_state.get("scored_summary"):
+            st.info("Paste at least one review line or upload a CSV file, then click Analyze Reviews.")
 
-        summary = st.session_state.scored_summary or {}
-        high_val = summary.get("high_urgency", 170)
-        at_risk_val = summary.get("at_risk", 472)
-        low_risk_val = summary.get("low_risk", 1838)
-        at_risk_rev_val = summary.get("at_risk_revenue_inr", 943530)
-        avg_churn_val = summary.get("avg_churn_pct", 38.4)
-        total_goodwill_val = summary.get("total_goodwill_inr", 84200)
+        summary = st.session_state.get("scored_summary") or {}
+        high_val = summary.get("high_urgency", "—")
+        at_risk_val = summary.get("at_risk", "—")
+        low_risk_val = summary.get("low_risk", "—")
+        at_risk_rev_val = summary.get("at_risk_revenue_inr", "—")
+        avg_churn_val = summary.get("avg_churn_pct", "—")
+        total_goodwill_val = summary.get("total_goodwill_inr", "—")
 
         active_summary = {
             "high_urgency": high_val,
