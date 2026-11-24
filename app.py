@@ -189,7 +189,7 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
 
 
 ROBOT_CART_SVG = """
-<svg viewBox="0 0 360 220" width="100%" height="210" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 360 220" width="100%" height="215" xmlns="http://www.w3.org/2000/svg">
   <g fill="#facc15">
     <polygon points="168,26 171,33 179,33 173,38 175,45 168,41 161,45 163,38 157,33 165,33"/>
     <polygon points="188,26 191,33 199,33 193,38 195,45 188,41 181,45 183,38 177,33 185,33"/>
@@ -227,6 +227,8 @@ if "scored_summary" not in st.session_state:
     st.session_state.scored_summary = None
 if "uploaded_df" not in st.session_state:
     st.session_state.uploaded_df = None
+if "uploaded_name" not in st.session_state:
+    st.session_state.uploaded_name = None
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "Home"
 
@@ -267,6 +269,24 @@ st.markdown(
     .stButton > button[kind="primary"]:hover {
         background: linear-gradient(90deg, #8b5cf6 0%, #a855f7 100%) !important;
         color: #ffffff !important;
+    }
+    [data-testid="stTextArea"] textarea {
+        background-color: rgba(18, 9, 40, 0.92) !important;
+        color: #f5f3ff !important;
+        border: 1px solid rgba(168, 85, 247, 0.45) !important;
+        border-radius: 12px !important;
+    }
+    [data-testid="stFileUploaderDropzone"] {
+        background-color: rgba(24, 12, 54, 0.88) !important;
+        color: #f5f3ff !important;
+        border: 1px dashed rgba(192, 132, 252, 0.55) !important;
+        border-radius: 14px !important;
+    }
+    [data-testid="stFileUploaderDropzone"] button {
+        background-color: rgba(88, 28, 135, 0.9) !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(216, 180, 254, 0.4) !important;
+        border-radius: 8px !important;
     }
     .top-brand {
         font-size: 1.05rem;
@@ -387,7 +407,7 @@ elif st.session_state.active_tab == "How It Works":
     st.write(
         "1. Paste customer reviews (one per line) or upload a CSV file.\n"
         "2. Click **✦ Analyze Reviews** to score urgency, churn risk, and retention actions.\n"
-        "3. Open **Insights** to inspect scored rows and export your priority queue."
+        "3. Open **Insights** or scroll below **Retention & Action Suggestions** to inspect and download scored rows."
     )
 elif st.session_state.active_tab == "Insights":
     st.subheader("Scored Queue & Retention Insights")
@@ -435,5 +455,124 @@ else:
         st.markdown("<div style='text-align:center; color:#c4b5fd; margin:8px 0;'>OR</div>", unsafe_allow_html=True)
         uploaded_csv = st.file_uploader("Upload CSV File", type=["csv"])
         if uploaded_csv is not None:
-            st.session_state.uploaded_df = pd.read_csv(uploaded_csv)
+            df_loaded = pd.read_csv(uploaded_csv)
+            st.session_state.uploaded_df = df_loaded
+            st.session_state.uploaded_name = uploaded_csv.name
+            st.caption(f"Loaded {len(df_loaded)} rows from `{uploaded_csv.name}`. Click **✦ Analyze Reviews** to score.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with right_box:
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        analyze_clicked = st.button("✦ Analyze Reviews", type="primary", use_container_width=True)
+        st.markdown("### Results", unsafe_allow_html=True)
+
+        if analyze_clicked:
+            if st.session_state.get("uploaded_df") is not None and not st.session_state.uploaded_df.empty:
+                scored_df, summary = score_reviews_dataframe(st.session_state.uploaded_df)
+                st.session_state.scored_table = scored_df
+                st.session_state.scored_summary = summary
+            else:
+                lines = [line.strip() for line in pasted_text.splitlines() if line.strip()]
+                if lines:
+                    df_input = pd.DataFrame({"review_text": lines})
+                    scored_df, summary = score_reviews_dataframe(df_input)
+                    st.session_state.scored_table = scored_df
+                    st.session_state.scored_summary = summary
+                else:
+                    st.session_state.scored_table = None
+                    st.session_state.scored_summary = None
+                    st.warning("Paste at least one review line or upload a CSV file to see predictions.")
+        elif not st.session_state.get("scored_summary"):
+            st.info("Paste at least one review line or upload a CSV file to see predictions.")
+
+        summary = st.session_state.get("scored_summary") or {}
+        high_val = summary.get("high_urgency", "—")
+        at_risk_val = summary.get("at_risk", "—")
+        low_risk_val = summary.get("low_risk", "—")
+        at_risk_rev_val = summary.get("at_risk_revenue_inr", "—")
+        avg_churn_val = summary.get("avg_churn_pct", "—")
+        total_goodwill_val = summary.get("total_goodwill_inr", "—")
+
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            st.markdown(
+                f"""
+                <div class="res-high">
+                    <div class="res-label">▲ High Urgency</div>
+                    <div class="res-num">{fmt_int(high_val)}</div>
+                    <div class="res-caption">Needs Attention</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with r2:
+            st.markdown(
+                f"""
+                <div class="res-risk">
+                    <div class="res-label">▣ At Risk</div>
+                    <div class="res-num">{fmt_int(at_risk_val)}</div>
+                    <div class="res-caption">Monitor Closely</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with r3:
+            st.markdown(
+                f"""
+                <div class="res-low">
+                    <div class="res-label">✓ Low Risk</div>
+                    <div class="res-num">{fmt_int(low_risk_val)}</div>
+                    <div class="res-caption">All Good</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        m1, m2 = st.columns(2)
+        with m1:
+            st.markdown(
+                f"""
+                <div class="res-neutral">
+                    <div class="res-label">₹ At-Risk Revenue Value</div>
+                    <div class="res-num">{fmt_inr(at_risk_rev_val)}</div>
+                    <div class="res-caption">Order value across elevated-risk reviews</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with m2:
+            st.markdown(
+                f"""
+                <div class="res-neutral">
+                    <div class="res-label">◔ Average Churn Risk</div>
+                    <div class="res-num">{fmt_pct(avg_churn_val)}</div>
+                    <div class="res-caption">Mean churn likelihood in current batch</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown('<div class="sugg-box">', unsafe_allow_html=True)
+        st.markdown("**✦ Retention & Action Suggestions**")
+        if st.session_state.get("scored_summary"):
+            st.write(
+                f"- **Escalate {fmt_int(high_val)} High-Urgency ticket(s) first:** Route negative/high-urgency complaints to priority support promptly.\n"
+                f"- **Protect {fmt_inr(at_risk_rev_val)} in At-Risk order value:** Target {fmt_int(at_risk_val)} elevated-risk accounts (avg churn risk {fmt_pct(avg_churn_val)}; goodwill pool {fmt_inr(total_goodwill_inr)}).\n"
+                f"- **Audit recurring friction drivers:** Inspect delivery delays, damaged arrivals, and quality defects below or in the Insights tab."
+            )
+        else:
+            st.caption("No retention actions generated yet. Submit reviews or upload a CSV and click Analyze Reviews.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
+            st.markdown("#### Scored Review Analysis")
+            st.dataframe(st.session_state.scored_table.head(25), use_container_width=True)
+            csv_bytes = st.session_state.scored_table.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="Download Full Scored CSV",
+                data=csv_bytes,
+                file_name="retaincraft_scored_reviews.csv",
+                mime="text/csv",
+            )
+
         st.markdown("</div>", unsafe_allow_html=True)
