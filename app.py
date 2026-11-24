@@ -115,7 +115,7 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
             pred_list = []
 
         urgency_labels = []
-        for idx, p in enumerate(pred_list):
+        for p in pred_list:
             if "high" in p or p in {"2", "urgent", "critical"}:
                 urgency_labels.append("High Urgency")
             elif "risk" in p or "med" in p or p in {"1", "at_risk", "at risk"}:
@@ -193,6 +193,44 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
     return df_work, summary
 
 
+ROBOT_CART_SVG = """
+<svg viewBox="0 0 360 220" width="100%" height="210" xmlns="http://www.w3.org/2000/svg">
+  <!-- Stars row -->
+  <g fill="#facc15">
+    <polygon points="168,26 171,33 179,33 173,38 175,45 168,41 161,45 163,38 157,33 165,33"/>
+    <polygon points="188,26 191,33 199,33 193,38 195,45 188,41 181,45 183,38 177,33 185,33"/>
+    <polygon points="208,26 211,33 219,33 213,38 215,45 208,41 201,45 203,38 197,33 205,33"/>
+    <polygon points="228,26 231,33 239,33 233,38 235,45 228,41 221,45 223,38 217,33 225,33"/>
+    <polygon points="248,26 251,33 259,33 253,38 255,45 248,41 241,45 243,38 237,33 245,33"/>
+  </g>
+  <!-- Sad speech bubble -->
+  <rect x="115" y="72" width="66" height="44" rx="12" fill="#9ca3af" opacity="0.85"/>
+  <polygon points="162,116 174,116 172,128" fill="#9ca3af" opacity="0.85"/>
+  <circle cx="138" cy="91" r="3" fill="#1e1b4b"/>
+  <circle cx="156" cy="91" r="3" fill="#1e1b4b"/>
+  <path d="M140 103 Q147 97 154 103" stroke="#1e1b4b" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Friendly Robot -->
+  <line x1="220" y1="54" x2="220" y2="72" stroke="#c4b5fd" stroke-width="3"/>
+  <circle cx="220" cy="52" r="5" fill="#38bdf8"/>
+  <rect x="188" y="72" width="64" height="54" rx="18" fill="#e0e7ff"/>
+  <rect x="196" y="82" width="48" height="32" rx="10" fill="#1e1b4b"/>
+  <circle cx="210" cy="96" r="4.5" fill="#38bdf8"/>
+  <circle cx="230" cy="96" r="4.5" fill="#38bdf8"/>
+  <path d="M213 105 Q220 110 227 105" stroke="#38bdf8" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Robot body & cart -->
+  <rect x="196" y="130" width="48" height="28" rx="10" fill="#c7d2fe"/>
+  <path d="M172 146 L252 146 L242 178 L184 178 Z" fill="#6366f1" stroke="#a5b4fc" stroke-width="2"/>
+  <circle cx="192" cy="188" r="7" fill="#38bdf8"/>
+  <circle cx="234" cy="188" r="7" fill="#38bdf8"/>
+  <!-- Upward trend bars -->
+  <rect x="268" y="138" width="10" height="36" rx="3" fill="#38bdf8"/>
+  <rect x="283" y="118" width="10" height="56" rx="3" fill="#60a5fa"/>
+  <rect x="298" y="96" width="10" height="78" rx="3" fill="#a78bfa"/>
+  <polyline points="266,112 286,92 308,68" fill="none" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
+  <polygon points="302,66 314,64 311,76" fill="#38bdf8"/>
+</svg>
+"""
+
 if "scored_table" not in st.session_state:
     st.session_state.scored_table = None
 if "scored_summary" not in st.session_state:
@@ -204,66 +242,129 @@ st.markdown(
     """
     <style>
     .stApp {
-        background: radial-gradient(circle at top left, #241046 0%, #0d081c 65%);
+        background: radial-gradient(circle at 18% 12%, #3b1478 0%, #16092e 45%, #090414 100%);
         color: #f5f3ff;
     }
-    .metric-card {
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(167, 139, 250, 0.25);
+    .top-brand {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #f5f3ff;
+        padding-top: 6px;
+    }
+    .right-badge {
+        text-align: right;
+        font-size: 0.85rem;
+        color: #c4b5fd;
+        padding-top: 8px;
+    }
+    .hero-title {
+        font-size: 2.35rem;
+        font-weight: 800;
+        line-height: 1.15;
+        color: #ffffff;
+        margin-bottom: 10px;
+    }
+    .hero-sub {
+        font-size: 1rem;
+        color: #d8b4fe;
+        margin-bottom: 18px;
+    }
+    .panel-card {
+        background: rgba(24, 12, 52, 0.78);
+        border: 1px solid rgba(168, 85, 247, 0.35);
+        border-radius: 18px;
+        padding: 20px;
+        margin-top: 12px;
+    }
+    .res-high {
+        background: linear-gradient(145deg, rgba(127, 29, 29, 0.55), rgba(49, 16, 42, 0.75));
+        border: 1px solid rgba(248, 113, 113, 0.45);
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 12px;
+    }
+    .res-risk {
+        background: linear-gradient(145deg, rgba(88, 28, 135, 0.55), rgba(36, 15, 66, 0.75));
+        border: 1px solid rgba(192, 132, 252, 0.45);
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 12px;
+    }
+    .res-low {
+        background: linear-gradient(145deg, rgba(19, 78, 74, 0.55), rgba(15, 36, 56, 0.75));
+        border: 1px solid rgba(45, 212, 191, 0.45);
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 12px;
+    }
+    .res-neutral {
+        background: rgba(35, 18, 74, 0.75);
+        border: 1px solid rgba(167, 139, 250, 0.35);
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
     }
     .res-label {
         font-size: 0.85rem;
-        color: #c4b5fd;
+        font-weight: 600;
+        color: #e9d5ff;
         margin-bottom: 6px;
     }
     .res-num {
         font-size: 1.75rem;
-        font-weight: 700;
+        font-weight: 800;
         color: #ffffff;
-        line-height: 1.2;
+        line-height: 1.15;
     }
     .res-caption {
-        font-size: 0.8rem;
-        color: #a78bfa;
-        margin-top: 4px;
+        font-size: 0.78rem;
+        color: #c4b5fd;
+        margin-top: 5px;
+    }
+    .sugg-box {
+        background: rgba(25, 12, 56, 0.75);
+        border: 1px solid rgba(168, 85, 247, 0.3);
+        border-radius: 14px;
+        padding: 16px;
+        margin-top: 8px;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-nav1, nav2, nav3, nav4, _ = st.columns([1.2, 1.2, 1.4, 1.2, 4])
-with nav1:
+b_col, n1, n2, n3, n4, r_badge = st.columns([1.6, 1.0, 1.0, 1.3, 1.0, 2.2])
+with b_col:
+    st.markdown('<div class="top-brand">✦ RetainCraft</div>', unsafe_allow_html=True)
+with n1:
     if st.button("Home", use_container_width=True):
         st.session_state.active_tab = "Home"
-with nav2:
+with n2:
     if st.button("About", use_container_width=True):
         st.session_state.active_tab = "About"
-with nav3:
+with n3:
     if st.button("How It Works", use_container_width=True):
         st.session_state.active_tab = "How It Works"
-with nav4:
+with n4:
     if st.button("Insights", use_container_width=True):
         st.session_state.active_tab = "Insights"
+with r_badge:
+    st.markdown('<div class="right-badge">✦ Built with ♥ using ML</div>', unsafe_allow_html=True)
 
-st.title("RetainCraft – Review Triage & Retention Studio")
-st.caption("Turn customer reviews into prioritized retention actions — reduce churn and protect revenue.")
+st.markdown("---")
 
 if st.session_state.active_tab == "About":
     st.subheader("About RetainCraft")
     st.write(
-        "RetainCraft triages incoming customer reviews and order context into High Urgency, "
-        "At Risk, and Low Risk queues while estimating at-risk revenue and goodwill retention credits."
+        "RetainCraft turns customer reviews and order context into prioritized retention queues—classifying "
+        "High Urgency, At Risk, and Low Risk items while estimating at-risk revenue and goodwill credits."
     )
 elif st.session_state.active_tab == "How It Works":
     st.subheader("How It Works")
     st.write(
         "1. Paste customer reviews (one per line) or upload a CSV file.\n"
         "2. Click **✦ Analyze Reviews** to score urgency, churn risk, and retention actions.\n"
-        "3. Review prioritized queues and export results from the Insights tab."
+        "3. Open **Insights** to inspect scored rows and export your priority queue."
     )
 elif st.session_state.active_tab == "Insights":
     st.subheader("Scored Queue & Retention Insights")
@@ -277,128 +378,56 @@ elif st.session_state.active_tab == "Insights":
             mime="text/csv",
         )
     else:
-        st.info("No analyzed dataset yet. Go to Home, add reviews or upload a CSV, and click Analyze Reviews.")
+        st.info("No reviews analyzed yet. Go to Home, paste reviews or upload a CSV, and click Analyze Reviews.")
 else:
-    left_box, right_box = st.columns([1.1, 1.2], gap="large")
+    hero_left, hero_right = st.columns([1.4, 1.0], gap="large")
+    with hero_left:
+        st.markdown('<div class="hero-title">RetainCraft –<br>Review Triage & Retention Studio</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="hero-sub">Turn customer reviews into actionable insights —<br>prioritize issues, reduce churn, and keep more customers.</div>',
+            unsafe_allow_html=True,
+        )
+        cta1, cta2, _ = st.columns([1.2, 1.2, 1.6])
+        with cta1:
+            if st.button("✦ Try the Model", type="primary", use_container_width=True):
+                st.session_state.active_tab = "Home"
+        with cta2:
+            if st.button("▸ Learn More", use_container_width=True):
+                st.session_state.active_tab = "How It Works"
+    with hero_right:
+        st.markdown(ROBOT_CART_SVG, unsafe_allow_html=True)
+
+    left_box, right_box = st.columns([1.05, 1.25], gap="large")
 
     with left_box:
-        st.subheader("✦ Paste Your Reviews")
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("### ✦ Paste Your Reviews")
+        st.caption("Add customer reviews or upload a CSV file")
         pasted_text = st.text_area(
             "Enter reviews here... (one per line)",
-            height=170,
+            height=165,
             placeholder="Enter reviews here... (one per line)",
+            label_visibility="collapsed",
         )
-        st.markdown("**OR**")
+        st.markdown("<div style='text-align:center; color:#c4b5fd; margin:8px 0;'>OR</div>", unsafe_allow_html=True)
         uploaded_csv = st.file_uploader("Upload CSV File", type=["csv"])
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with right_box:
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         analyze_clicked = st.button("✦ Analyze Reviews", type="primary", use_container_width=True)
-        st.markdown('<div class="res-label" style="margin-top:14px;">Results</div>', unsafe_allow_html=True)
+        st.markdown("### Results", unsafe_allow_html=True)
 
         if analyze_clicked:
             if uploaded_csv is not None:
-                df_csv = pd.read_csv(uploaded_csv)
-                scored_df, summary = score_reviews_dataframe(df_csv)
-                st.session_state.scored_table = scored_df
-                st.session_state.scored_summary = summary
+                try:
+                    df_input = pd.read_csv(uploaded_csv)
+                except Exception as e:
+                    st.error(f"Error reading CSV file: {e}")
+                    df_input = pd.DataFrame()
+            elif pasted_text.strip():
+                reviews_list = [line.strip() for line in pasted_text.strip().splitlines() if line.strip()]
+                df_input = pd.DataFrame({"review_text": reviews_list})
             else:
-                lines = [line.strip() for line in pasted_text.splitlines() if line.strip()]
-                if lines:
-                    df_input = pd.DataFrame({"review_text": lines})
-                    scored_df, summary = score_reviews_dataframe(df_input)
-                    st.session_state.scored_table = scored_df
-                    st.session_state.scored_summary = summary
-                else:
-                    st.session_state.scored_table = None
-                    st.session_state.scored_summary = None
-                    st.warning("Paste at least one review line or upload a CSV file to see predictions.")
-        elif not st.session_state.get("scored_summary"):
-            st.info("Paste at least one review line or upload a CSV file, then click Analyze Reviews.")
-
-        summary = st.session_state.get("scored_summary") or {}
-        high_val = summary.get("high_urgency", "—")
-        at_risk_val = summary.get("at_risk", "—")
-        low_risk_val = summary.get("low_risk", "—")
-        at_risk_rev_val = summary.get("at_risk_revenue_inr", "—")
-        avg_churn_val = summary.get("avg_churn_pct", "—")
-        total_goodwill_val = summary.get("total_goodwill_inr", "—")
-
-        r1, r2, r3 = st.columns(3)
-        with r1:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="res-label">High Urgency</div>
-                    <div class="res-num">{fmt_int(high_val)}</div>
-                    <div class="res-caption">Needs Attention</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with r2:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="res-label">At Risk</div>
-                    <div class="res-num">{fmt_int(at_risk_val)}</div>
-                    <div class="res-caption">Monitor Closely</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with r3:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="res-label">Low Risk</div>
-                    <div class="res-num">{fmt_int(low_risk_val)}</div>
-                    <div class="res-caption">All Good</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="res-label">At-Risk Revenue Value</div>
-                    <div class="res-num">{fmt_inr(at_risk_rev_val)}</div>
-                    <div class="res-caption">Elevated-risk orders</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with m2:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="res-label">Average Churn Risk</div>
-                    <div class="res-num">{fmt_pct(avg_churn_val)}</div>
-                    <div class="res-caption">Mean batch churn risk</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with m3:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="res-label">Goodwill Budget</div>
-                    <div class="res-num">{fmt_inr(total_goodwill_val)}</div>
-                    <div class="res-caption">Suggested credits</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        st.markdown("### Retention & Action Suggestions")
-        if st.session_state.get("scored_summary"):
-            st.write(
-                f"- **Escalate {fmt_int(high_val)} High-Urgency ticket(s) first:** Route critical complaints to priority support immediately.\n"
-                f"- **Protect {fmt_inr(at_risk_rev_val)} in At-Risk order value:** Follow up with {fmt_int(at_risk_val)} at-risk customers (avg churn {fmt_pct(avg_churn_val)}; estimated goodwill pool {fmt_inr(total_goodwill_inr)}).\n"
-                f"- **Audit top friction drivers:** Check delivery delays, damaged arrivals, and product quality trends in the Insights tab."
-            )
-        else:
-            st.caption("Run an analysis to view retention recommendations.")
+                st.warning("Please paste reviews or upload a CSV file to analyze.")
+                df_input = pd.DataFrame()
