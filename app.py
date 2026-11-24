@@ -107,23 +107,23 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
     model = load_triage_model()
     n_rows = len(df_work)
 
+    urgency_labels = []
+    churn_risk_pct = None
+
     if model is not None and n_rows > 0:
         try:
             preds = model.predict(df_work)
             pred_list = [str(p).strip().lower() for p in preds]
+            for p in pred_list:
+                if "high" in p or p in {"2", "urgent", "critical"}:
+                    urgency_labels.append("High Urgency")
+                elif "risk" in p or "med" in p or p in {"1", "at_risk", "at risk"}:
+                    urgency_labels.append("At Risk")
+                else:
+                    urgency_labels.append("Low Risk")
+            if len(urgency_labels) != n_rows:
+                urgency_labels = []
         except Exception:
-            pred_list = []
-
-        urgency_labels = []
-        for p in pred_list:
-            if "high" in p or p in {"2", "urgent", "critical"}:
-                urgency_labels.append("High Urgency")
-            elif "risk" in p or "med" in p or p in {"1", "at_risk", "at risk"}:
-                urgency_labels.append("At Risk")
-            else:
-                urgency_labels.append("Low Risk")
-
-        if len(urgency_labels) != n_rows:
             urgency_labels = []
 
         if hasattr(model, "predict_proba"):
@@ -133,11 +133,6 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
                 churn_risk_pct = np.clip(np.round(max_probs * 100, 1), 1.0, 99.0)
             except Exception:
                 churn_risk_pct = None
-        else:
-            churn_risk_pct = None
-    else:
-        urgency_labels = []
-        churn_risk_pct = None
 
     if not urgency_labels:
         urgent_words = (
@@ -156,7 +151,7 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
             else:
                 urgency_labels.append("Low Risk")
 
-    if churn_risk_pct is None:
+    if churn_risk_pct is None or len(churn_risk_pct) != n_rows:
         base_map = {"High Urgency": 68.0, "At Risk": 36.0, "Low Risk": 9.5}
         churn_risk_pct = np.array([base_map[lbl] for lbl in urgency_labels], dtype="float64")
 
@@ -195,7 +190,6 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
 
 ROBOT_CART_SVG = """
 <svg viewBox="0 0 360 220" width="100%" height="210" xmlns="http://www.w3.org/2000/svg">
-  <!-- Stars row -->
   <g fill="#facc15">
     <polygon points="168,26 171,33 179,33 173,38 175,45 168,41 161,45 163,38 157,33 165,33"/>
     <polygon points="188,26 191,33 199,33 193,38 195,45 188,41 181,45 183,38 177,33 185,33"/>
@@ -203,13 +197,11 @@ ROBOT_CART_SVG = """
     <polygon points="228,26 231,33 239,33 233,38 235,45 228,41 221,45 223,38 217,33 225,33"/>
     <polygon points="248,26 251,33 259,33 253,38 255,45 248,41 241,45 243,38 237,33 245,33"/>
   </g>
-  <!-- Sad speech bubble -->
   <rect x="115" y="72" width="66" height="44" rx="12" fill="#9ca3af" opacity="0.85"/>
   <polygon points="162,116 174,116 172,128" fill="#9ca3af" opacity="0.85"/>
   <circle cx="138" cy="91" r="3" fill="#1e1b4b"/>
   <circle cx="156" cy="91" r="3" fill="#1e1b4b"/>
   <path d="M140 103 Q147 97 154 103" stroke="#1e1b4b" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-  <!-- Friendly Robot -->
   <line x1="220" y1="54" x2="220" y2="72" stroke="#c4b5fd" stroke-width="3"/>
   <circle cx="220" cy="52" r="5" fill="#38bdf8"/>
   <rect x="188" y="72" width="64" height="54" rx="18" fill="#e0e7ff"/>
@@ -217,12 +209,10 @@ ROBOT_CART_SVG = """
   <circle cx="210" cy="96" r="4.5" fill="#38bdf8"/>
   <circle cx="230" cy="96" r="4.5" fill="#38bdf8"/>
   <path d="M213 105 Q220 110 227 105" stroke="#38bdf8" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-  <!-- Robot body & cart -->
   <rect x="196" y="130" width="48" height="28" rx="10" fill="#c7d2fe"/>
   <path d="M172 146 L252 146 L242 178 L184 178 Z" fill="#6366f1" stroke="#a5b4fc" stroke-width="2"/>
   <circle cx="192" cy="188" r="7" fill="#38bdf8"/>
   <circle cx="234" cy="188" r="7" fill="#38bdf8"/>
-  <!-- Upward trend bars -->
   <rect x="268" y="138" width="10" height="36" rx="3" fill="#38bdf8"/>
   <rect x="283" y="118" width="10" height="56" rx="3" fill="#60a5fa"/>
   <rect x="298" y="96" width="10" height="78" rx="3" fill="#a78bfa"/>
@@ -235,6 +225,8 @@ if "scored_table" not in st.session_state:
     st.session_state.scored_table = None
 if "scored_summary" not in st.session_state:
     st.session_state.scored_summary = None
+if "uploaded_df" not in st.session_state:
+    st.session_state.uploaded_df = None
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "Home"
 
@@ -244,6 +236,37 @@ st.markdown(
     .stApp {
         background: radial-gradient(circle at 18% 12%, #3b1478 0%, #16092e 45%, #090414 100%);
         color: #f5f3ff;
+    }
+    [data-testid="stHeader"] {
+        background: transparent;
+    }
+    button[data-testid="stBaseButton-secondary"],
+    .stButton > button[kind="secondary"] {
+        background: rgba(45, 22, 92, 0.85) !important;
+        color: #f5f3ff !important;
+        border: 1px solid rgba(168, 85, 247, 0.45) !important;
+        border-radius: 999px !important;
+        font-weight: 600 !important;
+        transition: all 0.2s ease !important;
+    }
+    button[data-testid="stBaseButton-secondary"]:hover,
+    .stButton > button[kind="secondary"]:hover {
+        background: rgba(124, 58, 237, 0.9) !important;
+        color: #ffffff !important;
+        border-color: #c084fc !important;
+    }
+    button[data-testid="stBaseButton-primary"],
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(90deg, #7c3aed 0%, #9333ea 100%) !important;
+        color: #ffffff !important;
+        border: 1px solid rgba(216, 180, 254, 0.4) !important;
+        border-radius: 999px !important;
+        font-weight: 700 !important;
+    }
+    button[data-testid="stBaseButton-primary"]:hover,
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(90deg, #8b5cf6 0%, #a855f7 100%) !important;
+        color: #ffffff !important;
     }
     .top-brand {
         font-size: 1.05rem;
@@ -270,35 +293,35 @@ st.markdown(
         margin-bottom: 18px;
     }
     .panel-card {
-        background: rgba(24, 12, 52, 0.78);
+        background: rgba(24, 12, 52, 0.82);
         border: 1px solid rgba(168, 85, 247, 0.35);
         border-radius: 18px;
         padding: 20px;
         margin-top: 12px;
     }
     .res-high {
-        background: linear-gradient(145deg, rgba(127, 29, 29, 0.55), rgba(49, 16, 42, 0.75));
+        background: linear-gradient(145deg, rgba(127, 29, 29, 0.65), rgba(49, 16, 42, 0.85));
         border: 1px solid rgba(248, 113, 113, 0.45);
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
     }
     .res-risk {
-        background: linear-gradient(145deg, rgba(88, 28, 135, 0.55), rgba(36, 15, 66, 0.75));
+        background: linear-gradient(145deg, rgba(88, 28, 135, 0.65), rgba(36, 15, 66, 0.85));
         border: 1px solid rgba(192, 132, 252, 0.45);
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
     }
     .res-low {
-        background: linear-gradient(145deg, rgba(19, 78, 74, 0.55), rgba(15, 36, 56, 0.75));
+        background: linear-gradient(145deg, rgba(19, 78, 74, 0.65), rgba(15, 36, 56, 0.85));
         border: 1px solid rgba(45, 212, 191, 0.45);
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
     }
     .res-neutral {
-        background: rgba(35, 18, 74, 0.75);
+        background: rgba(35, 18, 74, 0.82);
         border: 1px solid rgba(167, 139, 250, 0.35);
         border-radius: 14px;
         padding: 16px;
@@ -307,7 +330,7 @@ st.markdown(
     .res-label {
         font-size: 0.85rem;
         font-weight: 600;
-        color: #e9d5ff;
+        color: #f3e8ff;
         margin-bottom: 6px;
     }
     .res-num {
@@ -322,7 +345,7 @@ st.markdown(
         margin-top: 5px;
     }
     .sugg-box {
-        background: rgba(25, 12, 56, 0.75);
+        background: rgba(25, 12, 56, 0.82);
         border: 1px solid rgba(168, 85, 247, 0.3);
         border-radius: 14px;
         padding: 16px;
@@ -411,23 +434,6 @@ else:
         )
         st.markdown("<div style='text-align:center; color:#c4b5fd; margin:8px 0;'>OR</div>", unsafe_allow_html=True)
         uploaded_csv = st.file_uploader("Upload CSV File", type=["csv"])
+        if uploaded_csv is not None:
+            st.session_state.uploaded_df = pd.read_csv(uploaded_csv)
         st.markdown("</div>", unsafe_allow_html=True)
-
-    with right_box:
-        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
-        analyze_clicked = st.button("✦ Analyze Reviews", type="primary", use_container_width=True)
-        st.markdown("### Results", unsafe_allow_html=True)
-
-        if analyze_clicked:
-            if uploaded_csv is not None:
-                try:
-                    df_input = pd.read_csv(uploaded_csv)
-                except Exception as e:
-                    st.error(f"Error reading CSV file: {e}")
-                    df_input = pd.DataFrame()
-            elif pasted_text.strip():
-                reviews_list = [line.strip() for line in pasted_text.strip().splitlines() if line.strip()]
-                df_input = pd.DataFrame({"review_text": reviews_list})
-            else:
-                st.warning("Please paste reviews or upload a CSV file to analyze.")
-                df_input = pd.DataFrame()
