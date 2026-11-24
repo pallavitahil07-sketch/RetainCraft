@@ -577,13 +577,22 @@ with st.container(border=True):
             "total_goodwill_inr": total_goodwill_val,
         }
 
+        def fmt_int(val):
+            return f"{int(val):,}" if isinstance(val, (int, float)) and not isinstance(val, bool) else str(val)
+
+        def fmt_inr(val):
+            return f"₹{int(round(val)):,}" if isinstance(val, (int, float)) and not isinstance(val, bool) else str(val)
+
+        def fmt_pct(val):
+            return f"{float(val):.1f}%" if isinstance(val, (int, float)) and not isinstance(val, bool) else str(val)
+
         r1, r2, r3 = st.columns(3)
         with r1:
             st.markdown(
                 f"""
                 <div class="res-high">
                     <div class="res-label">⚠ High Urgency</div>
-                    <div class="res-num">{high_val:,}</div>
+                    <div class="res-num">{fmt_int(high_val)}</div>
                     <div class="res-caption">Needs Attention</div>
                 </div>
                 """,
@@ -594,7 +603,7 @@ with st.container(border=True):
                 f"""
                 <div class="res-mid">
                     <div class="res-label">📈 At Risk</div>
-                    <div class="res-num">{at_risk_val:,}</div>
+                    <div class="res-num">{fmt_int(at_risk_val)}</div>
                     <div class="res-caption">Monitor Closely</div>
                 </div>
                 """,
@@ -605,7 +614,7 @@ with st.container(border=True):
                 f"""
                 <div class="res-low">
                     <div class="res-label">✓ Low Risk</div>
-                    <div class="res-num">{low_risk_val:,}</div>
+                    <div class="res-num">{fmt_int(low_risk_val)}</div>
                     <div class="res-caption">All Good</div>
                 </div>
                 """,
