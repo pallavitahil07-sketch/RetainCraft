@@ -556,7 +556,40 @@ Record: {row_dict}
     )
 
 
-def ask_data_copilot(question: str, scored_df: pd.DataFrame, summary: dict) -> str:
+def _extract_matching_reviews_table(question: str, scored_df: pd.DataFrame) -> pd.DataFrame | None:
+    q = question.lower()
+    pos_words = ["great", "good", "love", "loved", "best", "reliable", "smooth", "happy", "satisfied", "fits", "fast", "authentic", "fresh", "helpful"]
+    neg_words = ["refund", "late", "delay", "damaged", "broken", "counterfeit", "fake", "flimsy", "tight", "duller", "worst", "leaking", "burnt"]
+
+    if any(k in q for k in ["positive", "good review", "happy", "praise", "best review", "top 3 positive", "top three positive"]):
+        low_df = scored_df[scored_df["urgency_class"] == "Low Risk"].copy()
+        if low_df.empty:
+            low_df = scored_df.copy()
+        pos_scores = low_df["review_text"].fillna("").astype(str).apply(
+            lambda t: sum(1 for w in pos_words if w in t.lower())
+        )
+        low_df = low_df.assign(_pos_score=pos_scores).sort_values(by=["_pos_score", "churn_risk_pct"], ascending=[False, True])
+        return low_df[["review_id", "review_text"]].head(3).reset_index(drop=True)
+
+    if any(k in q for k in ["negative", "complaint", "bad review", "urgent", "high urgency"]):
+        hi_df = scored_df[scored_df["urgency_class"] == "High Urgency"].copy()
+        if hi_df.empty:
+            hi_df = scored_df.copy()
+        neg_scores = hi_df["review_text"].fillna("").astype(str).apply(
+            lambda t: sum(1 for w in neg_words if w in t.lower())
+        )
+        hi_df = hi_df.assign(_neg_score=neg_scores).sort_values(by=["_neg_score", "churn_risk_pct"], ascending=[False, False])
+        return hi_df[["review_id", "review_text"]].head(3).reset_index(drop=True)
+
+    if any(k in q for k in ["top 3", "top three", "sample", "reviews"]):
+        return scored_df[["review_id", "review_text"]].head(3).reset_index(drop=True)
+
+    return None
+
+
+def ask_data_copilot(question: str, scored_df: pd.DataFrame, summary: dict) -> tuple[str, pd.DataFrame | None]:
+    result_table = _extract_matching_reviews_table(question, scored_df)
+
     theme_counts = (
         scored_df["root_cause_theme"].value_counts().to_dict()
         if "root_cause_theme" in scored_df.columns
@@ -567,10 +600,11 @@ def ask_data_copilot(question: str, scored_df: pd.DataFrame, summary: dict) -> s
         if "category" in scored_df.columns
         else {}
     )
-    sample_rows = scored_df.head(8).to_dict(orient="records")
+    sample_rows = scored_df.head(12).to_dict(orient="records")
 
     prompt = f"""
-Answer this question concisely and practically based on the scored dataset:
+Answer this question concisely and directly using the scored dataset below.
+If the user asks for specific reviews (like top positive reviews), list their exact review_id and review_text clearly.
 
 Question: {question}
 Total Rows: {len(scored_df)}
@@ -582,15 +616,19 @@ Sample Rows: {sample_rows}
 
     ai_text = call_gemini_with_fallback(prompt)
     if ai_text:
-        return ai_text
+        return ai_text, result_table
+
+    if result_table is not None and not result_table.empty:
+        return f"Showing top {len(result_table)} matching reviews for: **{question}**", result_table
 
     top_themes_str = ", ".join(f"{k} ({v})" for k, v in list(theme_counts.items())[:3]) or "N/A"
-    return (
+    fallback_msg = (
         f"**Summary for:** {question}\n"
         f"- **Rows:** {fmt_int(len(scored_df))} ({fmt_int(summary.get('high_urgency'))} High Urgency, "
         f"{fmt_int(summary.get('at_risk'))} At Risk, {fmt_int(summary.get('low_risk'))} Low Risk)\n"
         f"- **At-Risk Value:** {fmt_inr(summary.get('at_risk_revenue_inr'))} | **Goodwill Pool:** {fmt_inr(summary.get('total_goodwill_inr'))} | **Top Themes:** {top_themes_str}"
     )
+    return fallback_msg, None
 
 
 def _prepare_image_part(raw_bytes: bytes, mime_type: str | None) -> tuple[types.Part, dict]:
@@ -794,6 +832,7 @@ for k, v in {
     "reply_draft": None,
     "goodwill_email_draft": None,
     "copilot_answer": None,
+    "copilot_table": None,
     "defect_report": None,
     "uploaded_df": None,
     "uploaded_name": None,
@@ -1104,6 +1143,7 @@ else:
                 st.session_state.reply_draft = None
                 st.session_state.goodwill_email_draft = None
                 st.session_state.copilot_answer = None
+                st.session_state.copilot_table = None
                 st.session_state.basket_boost = True
 
         summary = st.session_state.get("scored_summary") or {}
@@ -1239,15 +1279,19 @@ else:
             copilot_q = st.text_input("Question", placeholder="Ask about this batch...", label_visibility="collapsed")
             if st.button("Ask Copilot", key="btn_ask_copilot"):
                 if copilot_q.strip():
-                    st.session_state.copilot_answer = ask_data_copilot(
+                    ans_text, ans_table = ask_data_copilot(
                         copilot_q.strip(), df_scored, st.session_state.scored_summary or {}
                     )
+                    st.session_state.copilot_answer = ans_text
+                    st.session_state.copilot_table = ans_table
                 else:
                     st.warning("Enter a question.")
             if st.session_state.get("copilot_answer"):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 st.markdown(st.session_state.copilot_answer)
                 st.markdown("</div>", unsafe_allow_html=True)
+            if st.session_state.get("copilot_table") is not None and not st.session_state.copilot_table.empty:
+                st.dataframe(st.session_state.copilot_table, width="stretch", hide_index=True)
 
         row_d_left, row_d_right = st.columns(2, gap="large")
         with row_d_left:
