@@ -1,6 +1,8 @@
+import json
 import os
 from pathlib import Path
 from google import genai
+from google.genai import types
 import joblib
 import numpy as np
 import pandas as pd
@@ -78,7 +80,6 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
         }
         return df_work, empty_summary
 
-    # 1. Auto-detect review / text column across any CSV schema
     text_col = _find_best_column(
         df_work,
         [
@@ -102,7 +103,6 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
     if "review_id" not in df_work.columns:
         df_work["review_id"] = [f"REV-{i + 1:04d}" for i in range(n_rows)]
 
-    # 2. Auto-detect numeric order / price / amount column
     price_col = _find_best_column(
         df_work,
         ["price_inr", "order_value", "amount", "price", "revenue", "total", "cost", "fare", "value"],
@@ -116,7 +116,6 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
         else:
             prices_series = pd.Series(DEFAULT_PRICE, index=df_work.index, dtype="float64")
 
-    # 3. Auto-detect numeric days / delivery / delay / tenure column
     days_col = _find_best_column(
         df_work,
         ["days_since_delivery", "delivery_days", "days", "delay", "tat", "age", "tenure"],
@@ -147,7 +146,6 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
     df_work["category"] = category_series
     df_work["city"] = city_series
 
-    # 4. Safe call to trained triage model
     model = load_triage_model()
     urgency_labels = []
     churn_risk_pct = None
@@ -177,7 +175,6 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
             except Exception:
                 churn_risk_pct = None
 
-    # 5. Safe fallback triage when model doesn't match custom CSV columns
     if not urgency_labels:
         urgent_words = (
             "broken", "damaged", "late", "delay", "refund", "fake", "counterfeit",
@@ -246,13 +243,72 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
+def _fallback_theme(text: str) -> str:
+    t = str(text).lower()
+    if any(k in t for k in ["late", "delay", "slow", "tracking", "delivery"]):
+        return "Logistics & Delivery Delay"
+    if any(k in t for k in ["broken", "damaged", "leaking", "dented", "burnt", "heat"]):
+        return "Damaged / Defective Item"
+    if any(k in t for k in ["fake", "counterfeit", "wrong item", "missing"]):
+        return "Authenticity / Fulfillment Mismatch"
+    if any(k in t for k in ["tight", "size", "fit", "stiff", "flimsy"]):
+        return "Product Fit & Build Quality"
+    if any(k in t for k in ["refund", "support", "refused", "reply"]):
+        return "Support & Refund Friction"
+    return "Positive / General Feedback"
+
+
+def tag_root_causes_and_chart(scored_df: pd.DataFrame, use_gemini: bool = True) -> pd.DataFrame:
+    df_out = scored_df.copy()
+    texts = df_out["review_text"].fillna("").astype(str).tolist()
+    themes = [_fallback_theme(t) for t in texts]
+
+    client = get_gemini_client() if use_gemini else None
+    if client is not None and len(texts) > 0:
+        sample_items = [
+            {"idx": i, "text": texts[i][:180], "urgency": str(df_out.iloc[i]["urgency_class"])}
+            for i in range(min(len(texts), 40))
+        ]
+        allowed_themes = [
+            "Logistics & Delivery Delay",
+            "Damaged / Defective Item",
+            "Authenticity / Fulfillment Mismatch",
+            "Product Fit & Build Quality",
+            "Support & Refund Friction",
+            "Positive / General Feedback",
+        ]
+        prompt = f"""
+Classify each item into one of these exact themes: {allowed_themes}.
+Return ONLY a valid JSON list of objects with keys "idx" (int) and "theme" (str).
+Items: {json.dumps(sample_items)}
+""".strip()
+        try:
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+            parsed = json.loads(resp.text or "[]")
+            if isinstance(parsed, list):
+                for item in parsed:
+                    idx = item.get("idx")
+                    th = item.get("theme")
+                    if isinstance(idx, int) and 0 <= idx < len(themes) and th in allowed_themes:
+                        themes[idx] = th
+        except Exception:
+            pass
+
+    df_out["root_cause_theme"] = themes
+    return df_out
+
+
 def generate_genai_insights(scored_df: pd.DataFrame, summary: dict, file_label: str = "uploaded dataset") -> str:
     client = get_gemini_client()
     if client is None:
         return (
-            "- **Gemini API key not detected yet:** Make sure `GEMINI_API_KEY` is saved in Streamlit Secrets and wait ~1 minute to apply.\n"
-            f"- **Triage Summary ({file_label}):** {fmt_int(summary.get('high_urgency'))} High Urgency, "
-            f"{fmt_int(summary.get('at_risk'))} At Risk, and {fmt_int(summary.get('low_risk'))} Low Risk rows scored."
+            "- **Gemini API key not detected yet:** Add `GEMINI_API_KEY` in Streamlit Secrets and wait ~1 minute.\n"
+            f"- **Batch Summary ({file_label}):** {fmt_int(summary.get('high_urgency'))} High Urgency, "
+            f"{fmt_int(summary.get('at_risk'))} At Risk, and {fmt_int(summary.get('low_risk'))} Low Risk items scored."
         )
 
     numeric_cols = scored_df.select_dtypes(include=[np.number]).columns.tolist()
@@ -302,6 +358,121 @@ Provide 4 concise bullet points:
         )
 
 
+def draft_customer_and_escalation(row_dict: dict) -> str:
+    client = get_gemini_client()
+    if client is None:
+        return (
+            "**Customer Reply Draft:** We sincerely apologize for the trouble with your recent order "
+            f"({row_dict.get('review_id', 'Ticket')}). Our priority care team is reviewing this now and will follow up shortly.\n\n"
+            "**Internal Escalation Brief:** Urgency="
+            f"{row_dict.get('urgency_class', 'N/A')}, Churn Risk={row_dict.get('churn_risk_pct', 'N/A')}%, "
+            f"Suggested Goodwill={fmt_inr(row_dict.get('goodwill_credit_inr', 0))}."
+        )
+
+    prompt = f"""
+You are a customer retention specialist for an e-commerce & marketplace operations team.
+Using this record, write two short sections:
+1. **Customer Reply** (empathetic, clear, action-oriented message to the customer)
+2. **Internal Escalation Note** (concise ops brief with priority, root issue, and goodwill guidance)
+
+Record Details: {row_dict}
+""".strip()
+
+    try:
+        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        return (resp.text or "").strip()
+    except Exception as e:
+        return f"Could not generate draft (`{type(e).__name__}`)."
+
+
+def ask_data_copilot(question: str, scored_df: pd.DataFrame, summary: dict) -> str:
+    client = get_gemini_client()
+    if client is None:
+        return "Add `GEMINI_API_KEY` in Streamlit Secrets to ask AI questions about your scored data."
+
+    theme_counts = (
+        scored_df["root_cause_theme"].value_counts().to_dict()
+        if "root_cause_theme" in scored_df.columns
+        else {}
+    )
+    cat_counts = (
+        scored_df["category"].value_counts().head(6).to_dict()
+        if "category" in scored_df.columns
+        else {}
+    )
+    sample_rows = scored_df.head(8).to_dict(orient="records")
+
+    prompt = f"""
+Answer the user's analytics/retention question based on the scored dataset below. Be concise, accurate, and actionable.
+
+Question: {question}
+Total Rows: {len(scored_df)}
+Summary Metrics: {summary}
+Root-Cause Themes: {theme_counts}
+Top Categories: {cat_counts}
+Sample Rows: {sample_rows}
+""".strip()
+
+    try:
+        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        return (resp.text or "").strip()
+    except Exception as e:
+        return f"Copilot response unavailable (`{type(e).__name__}`)."
+
+
+def inspect_defect_photo_with_gemini(image_bytes: bytes, mime_type: str, context_note: str) -> str:
+    client = get_gemini_client()
+    if client is None:
+        return "Add `GEMINI_API_KEY` in Streamlit Secrets to inspect defect or packaging photos with Gemini."
+
+    prompt = f"""
+Inspect this uploaded product/packaging photo alongside the support context below.
+Provide:
+1. Visible condition / damage / packaging observations.
+2. Severity rating (Low / Medium / High) and churn risk impact.
+3. Recommended resolution (Instant Replacement, Partial Refund, Goodwill Credit, or No Action).
+
+Context: {context_note or "Customer defect/review inspection"}
+""".strip()
+
+    try:
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                prompt,
+            ],
+        )
+        return (resp.text or "").strip()
+    except Exception as e:
+        return f"Image inspection unavailable (`{type(e).__name__}`)."
+
+
+def generate_retention_playbook(scored_df: pd.DataFrame, summary: dict) -> str:
+    client = get_gemini_client()
+    if client is None:
+        return (
+            "- **High Urgency:** Offer immediate replacement/refund + capped goodwill credit and priority callback.\n"
+            "- **At Risk:** Send proactive apology, delivery/fit help, and a targeted loyalty/voucher offer.\n"
+            "- **Low Risk:** Reinforce satisfaction with a reward point nudge or repeat-purchase prompt."
+        )
+
+    sample_rows = scored_df.head(6).to_dict(orient="records")
+    prompt = f"""
+Create a concise **Retention Playbook & Offer Strategy** for these triage results.
+Recommend when to use non-monetary retention actions (priority replacement, guided onboarding, loyalty points) vs. goodwill credits so margins stay protected.
+
+Summary: {summary}
+Sample Scored Rows: {sample_rows}
+""".strip()
+
+    try:
+        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        return (resp.text or "").strip()
+    except Exception as e:
+        return f"Playbook generation fallback (`{type(e).__name__}`)."
+
+
 ROBOT_CART_SVG = """
 <svg viewBox="0 0 360 220" width="100%" height="215" xmlns="http://www.w3.org/2000/svg">
   <g fill="#facc15">
@@ -335,18 +506,20 @@ ROBOT_CART_SVG = """
 </svg>
 """
 
-if "scored_table" not in st.session_state:
-    st.session_state.scored_table = None
-if "scored_summary" not in st.session_state:
-    st.session_state.scored_summary = None
-if "genai_insights" not in st.session_state:
-    st.session_state.genai_insights = None
-if "uploaded_df" not in st.session_state:
-    st.session_state.uploaded_df = None
-if "uploaded_name" not in st.session_state:
-    st.session_state.uploaded_name = None
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "Home"
+for k, v in {
+    "scored_table": None,
+    "scored_summary": None,
+    "genai_insights": None,
+    "playbook_text": None,
+    "reply_draft": None,
+    "copilot_answer": None,
+    "defect_report": None,
+    "uploaded_df": None,
+    "uploaded_name": None,
+    "active_tab": "Home",
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 st.markdown(
     """
@@ -386,7 +559,8 @@ st.markdown(
         background: linear-gradient(90deg, #8b5cf6 0%, #a855f7 100%) !important;
         color: #ffffff !important;
     }
-    [data-testid="stTextArea"] textarea {
+    [data-testid="stTextArea"] textarea,
+    [data-testid="stTextInput"] input {
         background-color: rgba(18, 9, 40, 0.92) !important;
         color: #f5f3ff !important;
         border: 1px solid rgba(168, 85, 247, 0.45) !important;
@@ -515,15 +689,15 @@ st.markdown("---")
 if st.session_state.active_tab == "About":
     st.subheader("About RetainCraft")
     st.write(
-        "RetainCraft combines your ML triage model with Gemini Gen AI to analyze customer reviews or "
-        "any uploaded CSV dataset—surfacing urgency queues, at-risk value, and tailored business insights."
+        "RetainCraft pairs your trained ML triage model with Gemini Gen AI to help support and "
+        "operations teams prioritize tickets, inspect defect media, tag root causes, and retain high-value customers."
     )
 elif st.session_state.active_tab == "How It Works":
     st.subheader("How It Works")
     st.write(
-        "1. Paste reviews (one per line) or upload any CSV file.\n"
-        "2. Click **✦ Analyze Reviews** to score urgency, churn risk, and retention exposure.\n"
-        "3. View Gen AI business insights and scored rows right on Home or inside **Insights**."
+        "1. Paste reviews or upload any CSV file.\n"
+        "2. Click **✦ Analyze Reviews** to score urgency, churn risk, root-cause themes, and Gen AI insights.\n"
+        "3. Use the Reply Drafter, Retention Playbook, Ask Your Data Copilot, or Defect Photo Inspector below."
     )
 elif st.session_state.active_tab == "Insights":
     st.subheader("Scored Queue & AI Business Insights")
@@ -531,6 +705,9 @@ elif st.session_state.active_tab == "Insights":
         if st.session_state.get("genai_insights"):
             st.markdown("### ✦ Gen AI Business Insights")
             st.markdown(st.session_state.genai_insights)
+        if "root_cause_theme" in st.session_state.scored_table.columns:
+            st.markdown("### Root-Cause Theme Breakdown")
+            st.bar_chart(st.session_state.scored_table["root_cause_theme"].value_counts())
         st.markdown("### Scored Data Table")
         st.dataframe(st.session_state.scored_table, use_container_width=True)
         csv_bytes = st.session_state.scored_table.to_csv(index=False).encode("utf-8")
@@ -589,30 +766,26 @@ else:
         if analyze_clicked:
             if st.session_state.get("uploaded_df") is not None and not st.session_state.uploaded_df.empty:
                 scored_df, summary = score_reviews_dataframe(st.session_state.uploaded_df)
-                st.session_state.scored_table = scored_df
-                st.session_state.scored_summary = summary
-                st.session_state.genai_insights = generate_genai_insights(
-                    scored_df,
-                    summary,
-                    st.session_state.get("uploaded_name") or "Uploaded CSV",
-                )
+                scored_df = tag_root_causes_and_chart(scored_df, use_gemini=True)
+                batch_label = st.session_state.get("uploaded_name") or "Uploaded CSV"
             else:
                 lines = [line.strip() for line in pasted_text.splitlines() if line.strip()]
                 if lines:
                     df_input = pd.DataFrame({"review_text": lines})
                     scored_df, summary = score_reviews_dataframe(df_input)
-                    st.session_state.scored_table = scored_df
-                    st.session_state.scored_summary = summary
-                    st.session_state.genai_insights = generate_genai_insights(
-                        scored_df,
-                        summary,
-                        "Pasted Reviews",
-                    )
+                    scored_df = tag_root_causes_and_chart(scored_df, use_gemini=True)
+                    batch_label = "Pasted Reviews"
                 else:
-                    st.session_state.scored_table = None
-                    st.session_state.scored_summary = None
-                    st.session_state.genai_insights = None
+                    scored_df, summary, batch_label = None, None, None
                     st.warning("Paste at least one review line or upload a CSV file to see predictions.")
+
+            if scored_df is not None and summary is not None:
+                st.session_state.scored_table = scored_df
+                st.session_state.scored_summary = summary
+                st.session_state.genai_insights = generate_genai_insights(scored_df, summary, batch_label)
+                st.session_state.playbook_text = generate_retention_playbook(scored_df, summary)
+                st.session_state.reply_draft = None
+                st.session_state.copilot_answer = None
         elif not st.session_state.get("scored_summary"):
             st.info("Paste at least one review line or upload a CSV file to see predictions.")
 
@@ -698,9 +871,81 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
         if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
+            df_scored = st.session_state.scored_table
+
+            # Feature 3: Automated Root-Cause & Theme Tagging + Chart
+            if "root_cause_theme" in df_scored.columns:
+                st.markdown("#### ✦ Root-Cause & Theme Breakdown")
+                st.bar_chart(df_scored["root_cause_theme"].value_counts())
+
+            # Feature 5: Automated Retention Playbook & Offer Optimizer
+            if st.session_state.get("playbook_text"):
+                st.markdown('<div class="sugg-box">', unsafe_allow_html=True)
+                st.markdown("**✦ Retention Playbook & Offer Optimizer**")
+                st.markdown(st.session_state.playbook_text)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Feature 1: One-Click Customer Reply & Escalation Drafter
+            st.markdown("#### ✦ One-Click Customer Reply & Escalation Drafter")
+            ticket_options = [
+                f"{row['review_id']} | {row['urgency_class']} | {str(row['review_text'])[:45]}"
+                for _, row in df_scored.head(50).iterrows()
+            ]
+            selected_ticket = st.selectbox("Select a ticket/review to draft response", ticket_options)
+            if st.button("Draft Customer Reply & Escalation", key="btn_draft_reply"):
+                sel_idx = ticket_options.index(selected_ticket)
+                st.session_state.reply_draft = draft_customer_and_escalation(df_scored.iloc[sel_idx].to_dict())
+            if st.session_state.get("reply_draft"):
+                st.markdown('<div class="sugg-box">', unsafe_allow_html=True)
+                st.markdown(st.session_state.reply_draft)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Feature 2: Interactive "Ask Your Data" Retention Copilot
+            st.markdown("#### ✦ Ask Your Data (Retention Copilot)")
+            copilot_q = st.text_input(
+                "Ask a question about this batch",
+                placeholder="e.g., What is the biggest complaint theme and how should we prioritize retention?",
+            )
+            if st.button("Ask Copilot", key="btn_ask_copilot"):
+                if copilot_q.strip():
+                    st.session_state.copilot_answer = ask_data_copilot(
+                        copilot_q.strip(), df_scored, st.session_state.scored_summary or {}
+                    )
+                else:
+                    st.warning("Type a question first.")
+            if st.session_state.get("copilot_answer"):
+                st.markdown('<div class="sugg-box">', unsafe_allow_html=True)
+                st.markdown(st.session_state.copilot_answer)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Feature 4: Multimodal Review & Product Defect Photo Inspection
+            st.markdown("#### ✦ Defect & Packaging Photo Inspector (Multimodal Gen AI)")
+            defect_photo = st.file_uploader(
+                "Upload product defect or packaging photo (optional)",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="defect_photo_uploader",
+            )
+            defect_note = st.text_input(
+                "Optional defect context",
+                placeholder="e.g., Customer reported item arrived damaged after 6 days",
+            )
+            if st.button("Inspect Defect Photo", key="btn_inspect_photo"):
+                if defect_photo is not None:
+                    mime = defect_photo.type or "image/jpeg"
+                    st.session_state.defect_report = inspect_defect_photo_with_gemini(
+                        defect_photo.getvalue(), mime, defect_note
+                    )
+                else:
+                    st.warning("Upload a PNG, JPG, or WEBP image first.")
+            if st.session_state.get("defect_report"):
+                st.markdown('<div class="sugg-box">', unsafe_allow_html=True)
+                st.markdown(st.session_state.defect_report)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Scored Table & Download
             st.markdown("#### Scored Review Analysis")
-            st.dataframe(st.session_state.scored_table.head(25), use_container_width=True)
-            csv_bytes = st.session_state.scored_table.to_csv(index=False).encode("utf-8")
+            st.dataframe(df_scored.head(25), use_container_width=True)
+            csv_bytes = df_scored.to_csv(index=False).encode("utf-8")
             st.download_button(
                 label="Download Full Scored CSV",
                 data=csv_bytes,
