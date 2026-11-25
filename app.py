@@ -54,6 +54,7 @@ def compute_retention_pulse(summary: dict | None, scored_df: pd.DataFrame | None
             "color": "#15803D",
             "bg": "#EEF6EE",
             "mood": "happy",
+            "band": "Healthy (>75)",
             "breakdown": "Pulse 78/100 — Upload a CSV or paste reviews and click Analyze Reviews for live scoring.",
         }
 
@@ -69,14 +70,17 @@ def compute_retention_pulse(summary: dict | None, scored_df: pd.DataFrame | None
         color = "#C93B2B"
         bg = "#FDECE8"
         mood = "concerned"
+        band = "Urgent (<50)"
     elif score <= 75:
         color = "#C4820E"
         bg = "#FDF4E3"
         mood = "steady"
+        band = "Watch (50–75)"
     else:
         color = "#15803D"
         bg = "#EEF6EE"
         mood = "happy"
+        band = "Healthy (>75)"
 
     high_share = (high_cnt / total_rows) * 100.0
     low_share = (low_cnt / total_rows) * 100.0
@@ -90,6 +94,7 @@ def compute_retention_pulse(summary: dict | None, scored_df: pd.DataFrame | None
         "color": color,
         "bg": bg,
         "mood": mood,
+        "band": band,
         "breakdown": breakdown,
     }
 
@@ -742,10 +747,18 @@ Context Note: {context_note or "Customer defect photo inspection"}
     )
 
 
-def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: bool = False):
+def render_pulse_and_robot_hero(
+    pulse: dict,
+    batch_name: str = "Ready",
+    rows_label: str = "—",
+    goodwill_label: str = "—",
+    robot_state: str = "Idle",
+    boost: bool = False,
+):
     score = pulse["score"]
     color = pulse["color"]
     mood = pulse["mood"]
+    band = pulse["band"]
     breakdown = pulse["breakdown"].replace('"', "&quot;")
     radius = 52
     circumference = 2 * 3.14159265 * radius
@@ -763,6 +776,7 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
         mood_label = "Happy"
 
     state_badge_text = f"{robot_state} · {mood_label}"
+    safe_batch = str(batch_name).replace("<", "&lt;").replace(">", "&gt;")
 
     html_code = f"""
     <!DOCTYPE html>
@@ -777,11 +791,11 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
           overflow: hidden;
         }}
         .hero-wrap {{
-          display: flex;
+          display: grid;
+          grid-template-columns: 185px 1fr 330px;
           align-items: center;
-          justify-content: space-between;
-          gap: 18px;
-          padding: 8px 18px;
+          gap: 16px;
+          padding: 6px 12px;
           height: 215px;
         }}
         .pulse-box {{
@@ -790,13 +804,12 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          min-width: 190px;
           cursor: pointer;
         }}
         .pulse-ring-wrap {{
           position: relative;
-          width: 132px;
-          height: 132px;
+          width: 126px;
+          height: 126px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -806,7 +819,7 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
           text-align: center;
         }}
         .pulse-num {{
-          font-size: 2rem;
+          font-size: 1.95rem;
           font-weight: 800;
           color: #2B1810;
           line-height: 1;
@@ -818,17 +831,16 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
           margin-top: 3px;
         }}
         .pulse-title {{
-          font-size: 0.85rem;
+          font-size: 0.84rem;
           font-weight: 800;
           color: #2B1810;
-          margin-top: 6px;
+          margin-top: 5px;
         }}
         .tooltip-card {{
           display: none;
           position: absolute;
-          top: 138px;
-          left: 50%;
-          transform: translateX(-50%);
+          top: 132px;
+          left: 10px;
           width: 270px;
           background: #2B1810;
           color: #FFFDF9;
@@ -842,10 +854,88 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
         .pulse-box:hover .tooltip-card {{
           display: block;
         }}
+        .center-hub {{
+          background: #FFFDF9;
+          border: 1px solid #E3D5C3;
+          border-left: 4px solid #7C8B6F;
+          border-radius: 16px;
+          padding: 14px 16px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          box-shadow: 0 4px 14px rgba(43, 24, 16, 0.04);
+        }}
+        .hub-top-row {{
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }}
+        .hub-title {{
+          font-size: 0.92rem;
+          font-weight: 800;
+          color: #2B1810;
+        }}
+        .hub-band {{
+          font-size: 0.75rem;
+          font-weight: 700;
+          padding: 3px 9px;
+          border-radius: 999px;
+          background: {pulse["bg"]};
+          color: {color};
+          border: 1px solid {color};
+        }}
+        .hub-stats {{
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+        }}
+        .hub-stat {{
+          background: #F8F2EA;
+          border: 1px solid #E8DCCB;
+          border-radius: 10px;
+          padding: 8px 10px;
+        }}
+        .hub-stat-k {{
+          font-size: 0.7rem;
+          color: #6A5344;
+          font-weight: 600;
+        }}
+        .hub-stat-v {{
+          font-size: 0.9rem;
+          color: #2B1810;
+          font-weight: 800;
+          margin-top: 2px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }}
+        .hub-bottom-row {{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          font-size: 0.75rem;
+          color: #564134;
+        }}
+        .boost-btn {{
+          background: #6E3B1E;
+          color: #FFFDF9;
+          border: none;
+          border-radius: 999px;
+          padding: 6px 12px;
+          font-size: 0.75rem;
+          font-weight: 700;
+          cursor: pointer;
+          white-space: nowrap;
+        }}
+        .boost-btn:hover {{
+          background: #522A14;
+        }}
         .robot-stage {{
           position: relative;
-          flex: 1;
-          max-width: 390px;
+          width: 100%;
           height: 205px;
           display: flex;
           flex-direction: column;
@@ -913,7 +1003,7 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
       <div class="hero-wrap">
         <div class="pulse-box" title="{breakdown}">
           <div class="pulse-ring-wrap">
-            <svg width="132" height="132" viewBox="0 0 132 132">
+            <svg width="126" height="126" viewBox="0 0 132 132">
               <circle cx="66" cy="66" r="{radius}" fill="none" stroke="#E5D8C7" stroke-width="11"/>
               <circle
                 cx="66" cy="66" r="{radius}" fill="none"
@@ -932,49 +1022,70 @@ def render_pulse_and_robot_hero(pulse: dict, robot_state: str = "Idle", boost: b
           <div class="tooltip-card">{breakdown}</div>
         </div>
 
+        <div class="center-hub">
+          <div class="hub-top-row">
+            <span class="hub-title">Retention Command Hub</span>
+            <span class="hub-band">{band}</span>
+          </div>
+          <div class="hub-stats">
+            <div class="hub-stat">
+              <div class="hub-stat-k">Batch</div>
+              <div class="hub-stat-v">{safe_batch}</div>
+            </div>
+            <div class="hub-stat">
+              <div class="hub-stat-k">Rows</div>
+              <div class="hub-stat-v">{rows_label}</div>
+            </div>
+            <div class="hub-stat">
+              <div class="hub-stat-k">Goodwill Pool</div>
+              <div class="hub-stat-v">{goodwill_label}</div>
+            </div>
+          </div>
+          <div class="hub-bottom-row">
+            <span>Bands: &lt;50 Red · 50–75 Amber · &gt;75 Green</span>
+            <button class="boost-btn" onclick="triggerBurst()">Boost Basket</button>
+          </div>
+        </div>
+
         <div id="robotStage" class="robot-stage {'analyzing' if robot_state == 'Analyzing...' else ''}" onclick="triggerBurst()">
           <div class="state-chip">{state_badge_text}</div>
-          <svg viewBox="0 0 380 185" width="100%" height="178" xmlns="http://www.w3.org/2000/svg">
-            <ellipse cx="195" cy="168" rx="135" ry="9" fill="#5C3317" opacity="0.14"/>
+          <svg viewBox="0 0 360 185" width="100%" height="178" xmlns="http://www.w3.org/2000/svg">
+            <ellipse cx="185" cy="168" rx="130" ry="9" fill="#5C3317" opacity="0.14"/>
             <g class="mover">
-              <line x1="236" y1="24" x2="236" y2="44" stroke="#2B1810" stroke-width="3" stroke-linecap="round"/>
-              <circle cx="236" cy="21" r="5" fill="{color}"/>
-              <rect x="200" y="44" width="72" height="54" rx="17" fill="#2B1810"/>
-              <rect x="209" y="53" width="54" height="32" rx="9" fill="#FFFDF9"/>
-              <circle cx="225" cy="69" r="4.2" fill="#7C4722"/>
-              <circle cx="249" cy="69" r="4.2" fill="#7C4722"/>
+              <line x1="226" y1="24" x2="226" y2="44" stroke="#2B1810" stroke-width="3" stroke-linecap="round"/>
+              <circle cx="226" cy="21" r="5" fill="{color}"/>
+              <rect x="190" y="44" width="72" height="54" rx="17" fill="#2B1810"/>
+              <rect x="199" y="53" width="54" height="32" rx="9" fill="#FFFDF9"/>
+              <circle cx="215" cy="69" r="4.2" fill="#7C4722"/>
+              <circle cx="239" cy="69" r="4.2" fill="#7C4722"/>
               <path d="{mouth_path}" stroke="#2B1810" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-              <rect x="210" y="102" width="52" height="26" rx="9" fill="#E6D7C3" stroke="#2B1810" stroke-width="2"/>
+              <rect x="200" y="102" width="52" height="26" rx="9" fill="#E6D7C3" stroke="#2B1810" stroke-width="2"/>
 
-              <!-- Arm holding basket -->
-              <path d="M210 114 L178 128" stroke="#2B1810" stroke-width="4" stroke-linecap="round"/>
-              <!-- Waving / Thumbs-up right arm -->
+              <path d="M200 114 L168 128" stroke="#2B1810" stroke-width="4" stroke-linecap="round"/>
               <g class="wave-hand">
-                <path d="M262 110 L286 92" stroke="#2B1810" stroke-width="4" stroke-linecap="round"/>
-                <circle cx="288" cy="90" r="5.5" fill="#C86D3B" stroke="#2B1810" stroke-width="1.5"/>
+                <path d="M252 110 L276 92" stroke="#2B1810" stroke-width="4" stroke-linecap="round"/>
+                <circle cx="278" cy="90" r="5.5" fill="#C86D3B" stroke="#2B1810" stroke-width="1.5"/>
               </g>
 
-              <!-- Shopping Basket -->
-              <path d="M92 120 L180 120 L170 154 L102 154 Z" fill="#8C4A27" stroke="#2B1810" stroke-width="2.2"/>
-              <path d="M105 120 Q136 92 167 120" stroke="#2B1810" stroke-width="2.4" fill="none"/>
-              <line x1="115" y1="126" x2="119" y2="148" stroke="#FFFDF9" stroke-width="1.8" opacity="0.85"/>
-              <line x1="136" y1="126" x2="136" y2="148" stroke="#FFFDF9" stroke-width="1.8" opacity="0.85"/>
-              <line x1="157" y1="126" x2="153" y2="148" stroke="#FFFDF9" stroke-width="1.8" opacity="0.85"/>
+              <path d="M84 120 L170 120 L160 154 L94 154 Z" fill="#8C4A27" stroke="#2B1810" stroke-width="2.2"/>
+              <path d="M97 120 Q127 92 157 120" stroke="#2B1810" stroke-width="2.4" fill="none"/>
+              <line x1="107" y1="126" x2="111" y2="148" stroke="#FFFDF9" stroke-width="1.8" opacity="0.85"/>
+              <line x1="127" y1="126" x2="127" y2="148" stroke="#FFFDF9" stroke-width="1.8" opacity="0.85"/>
+              <line x1="147" y1="126" x2="143" y2="148" stroke="#FFFDF9" stroke-width="1.8" opacity="0.85"/>
 
               <g class="wheel">
-                <circle cx="112" cy="162" r="7" fill="#2B1810"/>
-                <circle cx="112" cy="162" r="2.2" fill="#E6D7C3"/>
+                <circle cx="104" cy="162" r="7" fill="#2B1810"/>
+                <circle cx="104" cy="162" r="2.2" fill="#E6D7C3"/>
               </g>
               <g class="wheel">
-                <circle cx="158" cy="162" r="7" fill="#2B1810"/>
-                <circle cx="158" cy="162" r="2.2" fill="#E6D7C3"/>
+                <circle cx="148" cy="162" r="7" fill="#2B1810"/>
+                <circle cx="148" cy="162" r="2.2" fill="#E6D7C3"/>
               </g>
             </g>
 
-            <!-- Trend bars -->
-            <rect x="304" y="122" width="11" height="34" rx="3.5" fill="#C9B7A3"/>
-            <rect x="321" y="102" width="11" height="54" rx="3.5" fill="#9A6842"/>
-            <rect x="338" y="80" width="11" height="76" rx="3.5" fill="#5C3317"/>
+            <rect x="294" y="122" width="11" height="34" rx="3.5" fill="#C9B7A3"/>
+            <rect x="311" y="102" width="11" height="54" rx="3.5" fill="#9A6842"/>
+            <rect x="328" y="80" width="11" height="76" rx="3.5" fill="#5C3317"/>
           </svg>
         </div>
       </div>
@@ -1186,10 +1297,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Single centered RetainCraft title above the 4 navigation tabs
 st.markdown('<div class="top-center-brand">RetainCraft</div>', unsafe_allow_html=True)
 
-_, n1, n2, n3, n4, _ = st.columns([2.2, 1.0, 1.0, 1.3, 1.0, 2.2])
+_, n1, n2, n3, n4, _ = st.columns([1.2, 1.0, 1.0, 1.3, 1.0, 1.2])
 with n1:
     if st.button("Home", use_container_width=True):
         st.session_state.active_tab = "Home"
@@ -1228,9 +1338,17 @@ elif st.session_state.active_tab == "Insights":
     else:
         st.info("Upload a CSV or paste reviews on Home and click Analyze Reviews.")
 else:
+    active_summary = st.session_state.get("scored_summary") or {}
+    batch_rows_label = fmt_int(len(st.session_state.scored_table)) if st.session_state.scored_table is not None else "—"
+    batch_gw_label = fmt_inr(active_summary.get("total_goodwill_inr", "—"))
+    batch_name_label = st.session_state.get("uploaded_name") or ("Pasted Reviews" if st.session_state.scored_table is not None else "Ready")
+
     pulse_data = compute_retention_pulse(st.session_state.get("scored_summary"), st.session_state.get("scored_table"))
     render_pulse_and_robot_hero(
         pulse=pulse_data,
+        batch_name=batch_name_label,
+        rows_label=batch_rows_label,
+        goodwill_label=batch_gw_label,
         robot_state=st.session_state.get("robot_state", "Idle"),
         boost=bool(st.session_state.get("basket_boost", False)),
     )
