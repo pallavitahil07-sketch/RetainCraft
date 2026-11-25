@@ -500,6 +500,38 @@ Sample Rows: {sample_rows}
     )
 
 
+def draft_personalized_goodwill_and_email(row_dict: dict) -> str:
+    gw_val = fmt_inr(row_dict.get("goodwill_credit_inr", 0))
+    order_val = fmt_inr(row_dict.get("price_inr", DEFAULT_PRICE))
+    rev_id = row_dict.get("review_id", "Ticket")
+    urgency = row_dict.get("urgency_class", "At Risk")
+    churn_val = fmt_pct(row_dict.get("churn_risk_pct", 0))
+    theme = row_dict.get("root_cause_theme", "Customer Experience")
+
+    prompt = f"""
+Create a personalized retention package for this customer record in two clear sections:
+1. **Personalized Goodwill Offer** (exact goodwill amount {gw_val}, why it fits {urgency} / {churn_val} churn risk on a {order_val} order, and how to apply it cleanly)
+2. **Personalized Email** (include a clear **Subject:** line and a warm, specific customer email body addressing {theme} and offering {gw_val} goodwill)
+
+Record: {row_dict}
+""".strip()
+
+    ai_text = call_gemini_with_fallback(prompt)
+    if ai_text:
+        return ai_text
+
+    return (
+        f"**Personalized Goodwill Offer:** Issue **{gw_val}** goodwill credit on order/ticket **{rev_id}** "
+        f"(order value {order_val}, urgency **{urgency}**, churn risk **{churn_val}**).\n\n"
+        f"**Personalized Email**\n"
+        f"**Subject:** Making things right for your order ({rev_id})\n\n"
+        f"Hello,\n\n"
+        f"We are sorry for the inconvenience regarding **{theme}** on your recent order ({order_val}). "
+        f"As a gesture of goodwill, we have added **{gw_val}** in credit to your account and prioritized your case "
+        f"with our care team.\n\nWarm regards,\nRetainCraft Care Team"
+    )
+
+
 def draft_customer_and_escalation(row_dict: dict) -> str:
     prompt = f"""
 Write two short sections for this ticket:
@@ -555,7 +587,7 @@ Sample Rows: {sample_rows}
         f"**Summary for:** {question}\n"
         f"- **Rows:** {fmt_int(len(scored_df))} ({fmt_int(summary.get('high_urgency'))} High Urgency, "
         f"{fmt_int(summary.get('at_risk'))} At Risk, {fmt_int(summary.get('low_risk'))} Low Risk)\n"
-        f"- **At-Risk Value:** {fmt_inr(summary.get('at_risk_revenue_inr'))} | **Top Themes:** {top_themes_str}"
+        f"- **At-Risk Value:** {fmt_inr(summary.get('at_risk_revenue_inr'))} | **Goodwill Pool:** {fmt_inr(summary.get('total_goodwill_inr'))} | **Top Themes:** {top_themes_str}"
     )
 
 
@@ -597,7 +629,7 @@ def render_robot_basket_widget(boost: bool = False):
           display: flex;
           align-items: center;
           justify-content: center;
-          height: 220px;
+          height: 210px;
           overflow: hidden;
           font-family: system-ui, -apple-system, sans-serif;
         }}
@@ -605,7 +637,7 @@ def render_robot_basket_widget(boost: bool = False):
           position: relative;
           width: 100%;
           max-width: 420px;
-          height: 210px;
+          height: 205px;
           border-radius: 20px;
           background: radial-gradient(circle at 60% 45%, rgba(164, 108, 66, 0.16), rgba(251, 248, 244, 0));
           display: flex;
@@ -653,54 +685,47 @@ def render_robot_basket_widget(boost: bool = False):
     </head>
     <body>
       <div id="stage" class="stage" onclick="triggerBurst()">
-        <svg viewBox="0 0 400 210" width="100%" height="205" xmlns="http://www.w3.org/2000/svg">
-          <ellipse cx="200" cy="188" rx="145" ry="11" fill="#5C3317" opacity="0.14"/>
+        <svg viewBox="0 0 400 205" width="100%" height="200" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="200" cy="184" rx="145" ry="11" fill="#5C3317" opacity="0.14"/>
 
-          <!-- Floating brown & caramel stars -->
           <g class="spark" fill="#C86D3B">
-            <polygon points="135,24 138,31 145,31 139,35 141,42 135,38 129,42 131,35 125,31 132,31"/>
-            <polygon points="162,16 165,23 172,23 166,27 168,34 162,30 156,34 158,27 152,23 159,23"/>
-            <polygon points="189,24 192,31 199,31 193,35 195,42 189,38 183,42 185,35 179,31 186,31"/>
+            <polygon points="135,22 138,29 145,29 139,33 141,40 135,36 129,40 131,33 125,29 132,29"/>
+            <polygon points="162,14 165,21 172,21 166,25 168,32 162,28 156,32 158,25 152,21 159,21"/>
+            <polygon points="189,22 192,29 199,29 193,33 195,40 189,36 183,40 185,33 179,29 186,29"/>
           </g>
 
           <g class="mover">
-            <!-- Friendly Espresso & Cream Robot -->
-            <line x1="242" y1="42" x2="242" y2="62" stroke="#2B1810" stroke-width="3" stroke-linecap="round"/>
-            <circle cx="242" cy="39" r="5.5" fill="#C86D3B"/>
-            <rect x="205" y="62" width="74" height="56" rx="18" fill="#2B1810"/>
-            <rect x="214" y="71" width="56" height="34" rx="10" fill="#FFFDF9"/>
-            <circle cx="230" cy="87" r="4.5" fill="#7C4722"/>
-            <circle cx="254" cy="87" r="4.5" fill="#7C4722"/>
-            <path d="M234 96 Q242 103 250 96" stroke="#2B1810" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-            <rect x="216" y="122" width="52" height="28" rx="10" fill="#E6D7C3" stroke="#2B1810" stroke-width="2"/>
+            <line x1="242" y1="40" x2="242" y2="60" stroke="#2B1810" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="242" cy="37" r="5.5" fill="#C86D3B"/>
+            <rect x="205" y="60" width="74" height="56" rx="18" fill="#2B1810"/>
+            <rect x="214" y="69" width="56" height="34" rx="10" fill="#FFFDF9"/>
+            <circle cx="230" cy="85" r="4.5" fill="#7C4722"/>
+            <circle cx="254" cy="85" r="4.5" fill="#7C4722"/>
+            <path d="M234 94 Q242 101 250 94" stroke="#2B1810" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <rect x="216" y="120" width="52" height="28" rx="10" fill="#E6D7C3" stroke="#2B1810" stroke-width="2"/>
+            <path d="M216 133 L182 146" stroke="#2B1810" stroke-width="4" stroke-linecap="round"/>
 
-            <!-- Robot arm handling basket -->
-            <path d="M216 135 L182 148" stroke="#2B1810" stroke-width="4" stroke-linecap="round"/>
+            <path d="M95 136 L186 136 L175 172 L106 172 Z" fill="#8C4A27" stroke="#2B1810" stroke-width="2.2"/>
+            <path d="M108 136 Q140 106 172 136" stroke="#2B1810" stroke-width="2.5" fill="none"/>
+            <line x1="118" y1="142" x2="122" y2="166" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
+            <line x1="140" y1="142" x2="140" y2="166" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
+            <line x1="162" y1="142" x2="158" y2="166" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
 
-            <!-- Shopping Basket -->
-            <path d="M95 138 L186 138 L175 174 L106 174 Z" fill="#8C4A27" stroke="#2B1810" stroke-width="2.2"/>
-            <path d="M108 138 Q140 108 172 138" stroke="#2B1810" stroke-width="2.5" fill="none"/>
-            <line x1="118" y1="144" x2="122" y2="168" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
-            <line x1="140" y1="144" x2="140" y2="168" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
-            <line x1="162" y1="144" x2="158" y2="168" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
-
-            <!-- Animated Wheels -->
             <g class="wheel">
-              <circle cx="116" cy="183" r="7.5" fill="#2B1810"/>
-              <circle cx="116" cy="183" r="2.5" fill="#E6D7C3"/>
+              <circle cx="116" cy="181" r="7.5" fill="#2B1810"/>
+              <circle cx="116" cy="181" r="2.5" fill="#E6D7C3"/>
             </g>
             <g class="wheel">
-              <circle cx="164" cy="183" r="7.5" fill="#2B1810"/>
-              <circle cx="164" cy="183" r="2.5" fill="#E6D7C3"/>
+              <circle cx="164" cy="181" r="7.5" fill="#2B1810"/>
+              <circle cx="164" cy="181" r="2.5" fill="#E6D7C3"/>
             </g>
           </g>
 
-          <!-- Warm Brown & Sage Trend Bars -->
-          <rect x="302" y="140" width="12" height="36" rx="4" fill="#C9B7A3"/>
-          <rect x="321" y="120" width="12" height="56" rx="4" fill="#9A6842"/>
-          <rect x="340" y="96" width="12" height="80" rx="4" fill="#5C3317"/>
-          <polyline points="300,114 326,92 353,66" fill="none" stroke="#C86D3B" stroke-width="3.2" stroke-linecap="round"/>
-          <polygon points="347,64 359,62 356,74" fill="#C86D3B"/>
+          <rect x="302" y="138" width="12" height="36" rx="4" fill="#C9B7A3"/>
+          <rect x="321" y="118" width="12" height="56" rx="4" fill="#9A6842"/>
+          <rect x="340" y="94" width="12" height="80" rx="4" fill="#5C3317"/>
+          <polyline points="300,112 326,90 353,64" fill="none" stroke="#C86D3B" stroke-width="3.2" stroke-linecap="round"/>
+          <polygon points="347,62 359,60 356,72" fill="#C86D3B"/>
         </svg>
       </div>
       <script>
@@ -717,7 +742,7 @@ def render_robot_basket_widget(boost: bool = False):
     </body>
     </html>
     """
-    components.html(html_code, height=220, scrolling=False)
+    components.html(html_code, height=205, scrolling=False)
 
 
 for k, v in {
@@ -726,6 +751,7 @@ for k, v in {
     "genai_insights": None,
     "playbook_text": None,
     "reply_draft": None,
+    "goodwill_email_draft": None,
     "copilot_answer": None,
     "defect_report": None,
     "uploaded_df": None,
@@ -749,9 +775,6 @@ st.markdown(
     }
     [data-testid="stHeader"] {
         background: transparent;
-    }
-    .cacao-enter {
-        animation: cacaoReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
     }
     button[data-testid="stBaseButton-secondary"],
     .stButton > button[kind="secondary"] {
@@ -814,17 +837,24 @@ st.markdown(
         font-weight: 800;
         letter-spacing: -0.03em;
         color: #2B1810;
-        padding-top: 26px;
+        margin-bottom: 12px;
         animation: cacaoReveal 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
     }
-    .surface-card {
+    .hero-pill-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+        animation: cacaoReveal 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    .hero-pill {
         background: #FFFDF9;
-        border: 1px solid #E5D8C7;
-        border-radius: 18px;
-        padding: 20px;
-        margin-top: 12px;
-        box-shadow: 0 6px 20px rgba(43, 24, 16, 0.05);
-        animation: cacaoReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+        border: 1px solid #DFD0BE;
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: #4A3224;
     }
     .metric-high {
         background: #FDECE8;
@@ -926,17 +956,12 @@ with n4:
 st.markdown("---")
 
 if st.session_state.active_tab == "About":
-    st.markdown('<div class="surface-card">', unsafe_allow_html=True)
     st.subheader("RetainCraft")
-    st.write("Review triage, category scorecards, retention playbooks, and AI workflows.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.write("Review triage, category scorecards, personalized goodwill, personalized email, and AI workflows.")
 elif st.session_state.active_tab == "How It Works":
-    st.markdown('<div class="surface-card">', unsafe_allow_html=True)
     st.subheader("RetainCraft")
-    st.write("1. Paste reviews or upload any CSV.\n2. Click Analyze Reviews.\n3. Explore scorecards, playbooks, drafts, copilot, and photo inspection.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.write("1. Paste reviews or upload any CSV.\n2. Click Analyze Reviews.\n3. Review KPIs, scorecards, playbooks, personalized goodwill & email, reply drafter, copilot, and photo inspection.")
 elif st.session_state.active_tab == "Insights":
-    st.markdown('<div class="surface-card">', unsafe_allow_html=True)
     st.subheader("RetainCraft")
     if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
         if st.session_state.get("genai_insights"):
@@ -952,21 +977,40 @@ elif st.session_state.active_tab == "Insights":
         )
     else:
         st.info("Upload a CSV or paste reviews on Home and click Analyze Reviews.")
-    st.markdown("</div>", unsafe_allow_html=True)
 else:
-    hero_left, hero_right = st.columns([1.2, 1.0], gap="large")
+    active_summary = st.session_state.get("scored_summary") or {}
+    batch_rows_label = fmt_int(len(st.session_state.scored_table)) if st.session_state.scored_table is not None else "—"
+    batch_gw_label = fmt_inr(active_summary.get("total_goodwill_inr", "—"))
+    batch_name_label = st.session_state.get("uploaded_name") or ("Pasted Reviews" if st.session_state.scored_table is not None else "Ready")
+
+    hero_left, hero_right = st.columns([1.25, 1.0], gap="large")
     with hero_left:
         st.markdown('<div class="brand-hero">RetainCraft</div>', unsafe_allow_html=True)
-        if st.button("Animate Basket", key="btn_animate_basket"):
-            st.session_state.basket_boost = not st.session_state.basket_boost
+        h_btn1, h_btn2, _ = st.columns([1.3, 1.5, 1.5])
+        with h_btn1:
+            if st.button("Animate Basket", key="btn_animate_basket"):
+                st.session_state.basket_boost = not st.session_state.basket_boost
+        with h_btn2:
+            if st.button("Open Insights", key="btn_jump_insights"):
+                st.session_state.active_tab = "Insights"
+        st.markdown(
+            f"""
+            <div class="hero-pill-strip">
+                <span class="hero-pill">Batch: {batch_name_label}</span>
+                <span class="hero-pill">Rows: {batch_rows_label}</span>
+                <span class="hero-pill">Goodwill Pool: {batch_gw_label}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     with hero_right:
         render_robot_basket_widget(boost=bool(st.session_state.basket_boost))
         st.session_state.basket_boost = False
 
-    left_box, right_box = st.columns([1.0, 1.2], gap="large")
+    left_box, right_box = st.columns([1.0, 1.25], gap="large")
 
     with left_box:
-        st.markdown('<div class="surface-card">', unsafe_allow_html=True)
+        st.markdown("### Input & Batch Snapshot")
         pasted_text = st.text_area(
             "Reviews",
             height=155,
@@ -985,13 +1029,15 @@ else:
             top_cat = str(df_s["category"].value_counts().index[0]) if "category" in df_s.columns else "—"
             top_city = str(df_s["city"].value_counts().index[0]) if "city" in df_s.columns else "—"
             st.markdown('<div class="info-box">', unsafe_allow_html=True)
-            st.markdown(f"**Rows:** {fmt_int(len(df_s))}  |  **Top Category:** {top_cat}  |  **Top Region:** {top_city}")
+            st.markdown(
+                f"**Rows:** {fmt_int(len(df_s))}  |  **Top Category:** {top_cat}  |  **Top Region:** {top_city}\n\n"
+                f"**Goodwill Pool:** {fmt_inr((st.session_state.scored_summary or {}).get('total_goodwill_inr', '—'))}"
+            )
             st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with right_box:
-        st.markdown('<div class="surface-card">', unsafe_allow_html=True)
         analyze_clicked = st.button("Analyze Reviews", type="primary", use_container_width=True)
+        st.markdown("### Results & KPIs")
 
         if analyze_clicked:
             if st.session_state.get("uploaded_df") is not None and not st.session_state.uploaded_df.empty:
@@ -1015,6 +1061,7 @@ else:
                 st.session_state.genai_insights = generate_genai_insights(scored_df, summary, batch_label)
                 st.session_state.playbook_text = generate_retention_playbook(scored_df, summary)
                 st.session_state.reply_draft = None
+                st.session_state.goodwill_email_draft = None
                 st.session_state.copilot_answer = None
                 st.session_state.basket_boost = True
 
@@ -1043,7 +1090,7 @@ else:
                 unsafe_allow_html=True,
             )
 
-        m1, m2 = st.columns(2)
+        m1, m2, m3 = st.columns(3)
         with m1:
             st.markdown(
                 f'<div class="metric-neutral"><div class="metric-label">At-Risk Revenue</div><div class="metric-num">{fmt_inr(at_risk_rev_val)}</div></div>',
@@ -1054,6 +1101,11 @@ else:
                 f'<div class="metric-neutral"><div class="metric-label">Avg Churn Risk</div><div class="metric-num">{fmt_pct(avg_churn_val)}</div></div>',
                 unsafe_allow_html=True,
             )
+        with m3:
+            st.markdown(
+                f'<div class="metric-neutral"><div class="metric-label">Goodwill KPI Pool</div><div class="metric-num">{fmt_inr(total_goodwill_val)}</div></div>',
+                unsafe_allow_html=True,
+            )
 
         st.markdown('<div class="info-box">', unsafe_allow_html=True)
         if st.session_state.get("genai_insights"):
@@ -1061,11 +1113,10 @@ else:
         elif st.session_state.get("scored_summary"):
             st.write(
                 f"- High Urgency: {fmt_int(high_val)} | At Risk: {fmt_int(at_risk_val)} | "
-                f"At-Risk Revenue: {fmt_inr(at_risk_rev_val)} | Goodwill Pool: {fmt_inr(total_goodwill_val)}"
+                f"At-Risk Revenue: {fmt_inr(at_risk_rev_val)} | Goodwill KPI Pool: {fmt_inr(total_goodwill_val)}"
             )
         else:
             st.caption("—")
-        st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
@@ -1073,12 +1124,11 @@ else:
 
         row_a_left, row_a_right = st.columns([1.1, 1.0], gap="large")
         with row_a_left:
-            st.markdown('<div class="surface-card">', unsafe_allow_html=True)
+            st.markdown("### Root-Cause Breakdown")
             if "root_cause_theme" in df_scored.columns:
                 st.bar_chart(df_scored["root_cause_theme"].value_counts(), color="#8C4A27")
-            st.markdown("</div>", unsafe_allow_html=True)
         with row_a_right:
-            st.markdown('<div class="surface-card">', unsafe_allow_html=True)
+            st.markdown("### Strengths vs. Complaints")
             strengths, complaints = build_strengths_and_complaints(df_scored)
             s_col, c_col = st.columns(2)
             with s_col:
@@ -1089,9 +1139,8 @@ else:
                 st.markdown("**Complaints**")
                 for item in complaints:
                     st.markdown(f"- {item}")
-            st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="surface-card">', unsafe_allow_html=True)
+        st.markdown("### Category Scorecards")
         cards = build_category_scorecards(df_scored)
         for idx in range(0, len(cards), 2):
             c_left, c_right = st.columns(2, gap="medium")
@@ -1107,23 +1156,35 @@ else:
                             """,
                             unsafe_allow_html=True,
                         )
-        st.markdown("</div>", unsafe_allow_html=True)
+
+        ticket_options = [
+            f"{row['review_id']} | {row['urgency_class']} | {fmt_inr(row['goodwill_credit_inr'])} | {str(row['review_text'])[:38]}"
+            for _, row in df_scored.head(50).iterrows()
+        ]
+
+        row_gw_left, row_gw_right = st.columns(2, gap="large")
+        with row_gw_left:
+            st.markdown("### Personalized Goodwill & Email")
+            selected_gw_ticket = st.selectbox("Customer Ticket", ticket_options, key="sel_gw_ticket", label_visibility="collapsed")
+            if st.button("Generate Goodwill & Personalized Email", key="btn_goodwill_email"):
+                sel_idx = ticket_options.index(selected_gw_ticket)
+                st.session_state.goodwill_email_draft = draft_personalized_goodwill_and_email(df_scored.iloc[sel_idx].to_dict())
+            if st.session_state.get("goodwill_email_draft"):
+                st.markdown('<div class="info-box">', unsafe_allow_html=True)
+                st.markdown(st.session_state.goodwill_email_draft)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        with row_gw_right:
+            st.markdown("### Retention Playbook")
+            if st.session_state.get("playbook_text"):
+                st.markdown('<div class="info-box">', unsafe_allow_html=True)
+                st.markdown(st.session_state.playbook_text)
+                st.markdown("</div>", unsafe_allow_html=True)
 
         row_c_left, row_c_right = st.columns(2, gap="large")
         with row_c_left:
-            st.markdown('<div class="surface-card">', unsafe_allow_html=True)
-            st.markdown("**Retention Playbook**")
-            if st.session_state.get("playbook_text"):
-                st.markdown(st.session_state.playbook_text)
-            st.markdown("</div>", unsafe_allow_html=True)
-        with row_c_right:
-            st.markdown('<div class="surface-card">', unsafe_allow_html=True)
-            st.markdown("**Reply & Escalation Drafter**")
-            ticket_options = [
-                f"{row['review_id']} | {row['urgency_class']} | {str(row['review_text'])[:42]}"
-                for _, row in df_scored.head(50).iterrows()
-            ]
-            selected_ticket = st.selectbox("Ticket", ticket_options, label_visibility="collapsed")
+            st.markdown("### Reply & Escalation Drafter")
+            selected_ticket = st.selectbox("Ticket", ticket_options, key="sel_reply_ticket", label_visibility="collapsed")
             if st.button("Draft Response", key="btn_draft_reply"):
                 sel_idx = ticket_options.index(selected_ticket)
                 st.session_state.reply_draft = draft_customer_and_escalation(df_scored.iloc[sel_idx].to_dict())
@@ -1131,12 +1192,9 @@ else:
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 st.markdown(st.session_state.reply_draft)
                 st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
 
-        row_d_left, row_d_right = st.columns(2, gap="large")
-        with row_d_left:
-            st.markdown('<div class="surface-card">', unsafe_allow_html=True)
-            st.markdown("**Ask Your Data**")
+        with row_c_right:
+            st.markdown("### Ask Your Data")
             copilot_q = st.text_input("Question", placeholder="Ask about this batch...", label_visibility="collapsed")
             if st.button("Ask Copilot", key="btn_ask_copilot"):
                 if copilot_q.strip():
@@ -1149,11 +1207,10 @@ else:
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 st.markdown(st.session_state.copilot_answer)
                 st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
 
-        with row_d_right:
-            st.markdown('<div class="surface-card">', unsafe_allow_html=True)
-            st.markdown("**Defect Photo Inspector**")
+        row_d_left, row_d_right = st.columns(2, gap="large")
+        with row_d_left:
+            st.markdown("### Defect Photo Inspector")
             defect_photo = st.file_uploader(
                 "Photo", type=["png", "jpg", "jpeg", "webp"], key="defect_photo_uploader", label_visibility="collapsed"
             )
@@ -1169,14 +1226,13 @@ else:
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 st.markdown(st.session_state.defect_report)
                 st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<div class="surface-card">', unsafe_allow_html=True)
-        st.dataframe(df_scored.head(25), width="stretch")
-        st.download_button(
-            label="Download Full Scored CSV",
-            data=df_scored.to_csv(index=False).encode("utf-8"),
-            file_name="retaincraft_scored_output.csv",
-            mime="text/csv",
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+        with row_d_right:
+            st.markdown("### Scored Table & Export")
+            st.dataframe(df_scored.head(25), width="stretch")
+            st.download_button(
+                label="Download Full Scored CSV",
+                data=df_scored.to_csv(index=False).encode("utf-8"),
+                file_name="retaincraft_scored_output.csv",
+                mime="text/csv",
+            )
