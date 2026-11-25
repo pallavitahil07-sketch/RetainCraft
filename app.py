@@ -230,17 +230,27 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
     return df_work, summary
 
 
-def get_gemini_client():
-    api_key = None
+def _get_raw_gemini_key() -> str:
+    val = ""
     try:
-        api_key = st.secrets.get("GEMINI_API_KEY")
+        raw = st.secrets.get("GEMINI_API_KEY", "")
+        if raw is not None:
+            val = str(raw).strip()
     except Exception:
-        api_key = None
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY")
+        val = ""
+    if not val:
+        val = str(os.getenv("GEMINI_API_KEY", "")).strip()
+    return val
+
+
+def get_gemini_client():
+    api_key = _get_raw_gemini_key()
     if not api_key:
         return None
-    return genai.Client(api_key=api_key)
+    try:
+        return genai.Client(api_key=api_key)
+    except Exception:
+        return None
 
 
 def _fallback_theme(text: str) -> str:
@@ -306,9 +316,9 @@ def generate_genai_insights(scored_df: pd.DataFrame, summary: dict, file_label: 
     client = get_gemini_client()
     if client is None:
         return (
-            "- **Gemini API key not detected yet:** Add `GEMINI_API_KEY` in Streamlit Secrets and wait ~1 minute.\n"
-            f"- **Batch Summary ({file_label}):** {fmt_int(summary.get('high_urgency'))} High Urgency, "
-            f"{fmt_int(summary.get('at_risk'))} At Risk, and {fmt_int(summary.get('low_risk'))} Low Risk items scored."
+            f"- **No `GEMINI_API_KEY` found in Secrets.** Showing summary for **{file_label}**.\n"
+            f"- **Escalate {fmt_int(summary.get('high_urgency'))} High-Urgency item(s) first** and follow up on "
+            f"{fmt_int(summary.get('at_risk'))} At-Risk records ({fmt_inr(summary.get('at_risk_revenue_inr'))} elevated exposure)."
         )
 
     numeric_cols = scored_df.select_dtypes(include=[np.number]).columns.tolist()
@@ -352,7 +362,7 @@ Provide 4 concise bullet points:
         return (response.text or "").strip()
     except Exception as e:
         return (
-            f"- **AI insight fallback (`{type(e).__name__}`):** Showing core triage summary for **{file_label}**.\n"
+            f"- **AI insight fallback (`{type(e).__name__}`):** {e}\n"
             f"- **Escalate {fmt_int(summary.get('high_urgency'))} High-Urgency item(s) first** and follow up on "
             f"{fmt_int(summary.get('at_risk'))} At-Risk records ({fmt_inr(summary.get('at_risk_revenue_inr'))} elevated exposure)."
         )
@@ -382,7 +392,7 @@ Record Details: {row_dict}
         resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         return (resp.text or "").strip()
     except Exception as e:
-        return f"Could not generate draft (`{type(e).__name__}`)."
+        return f"Could not generate draft (`{type(e).__name__}`): {e}"
 
 
 def ask_data_copilot(question: str, scored_df: pd.DataFrame, summary: dict) -> str:
@@ -417,7 +427,7 @@ Sample Rows: {sample_rows}
         resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         return (resp.text or "").strip()
     except Exception as e:
-        return f"Copilot response unavailable (`{type(e).__name__}`)."
+        return f"Copilot response unavailable (`{type(e).__name__}`): {e}"
 
 
 def inspect_defect_photo_with_gemini(image_bytes: bytes, mime_type: str, context_note: str) -> str:
@@ -445,7 +455,7 @@ Context: {context_note or "Customer defect/review inspection"}
         )
         return (resp.text or "").strip()
     except Exception as e:
-        return f"Image inspection unavailable (`{type(e).__name__}`)."
+        return f"Image inspection unavailable (`{type(e).__name__}`): {e}"
 
 
 def generate_retention_playbook(scored_df: pd.DataFrame, summary: dict) -> str:
@@ -470,7 +480,7 @@ Sample Scored Rows: {sample_rows}
         resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         return (resp.text or "").strip()
     except Exception as e:
-        return f"Playbook generation fallback (`{type(e).__name__}`)."
+        return f"Playbook generation fallback (`{type(e).__name__}`): {e}"
 
 
 ROBOT_CART_SVG = """
@@ -873,19 +883,16 @@ else:
         if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
             df_scored = st.session_state.scored_table
 
-            # Feature 3: Automated Root-Cause & Theme Tagging + Chart
             if "root_cause_theme" in df_scored.columns:
                 st.markdown("#### ✦ Root-Cause & Theme Breakdown")
                 st.bar_chart(df_scored["root_cause_theme"].value_counts())
 
-            # Feature 5: Automated Retention Playbook & Offer Optimizer
             if st.session_state.get("playbook_text"):
                 st.markdown('<div class="sugg-box">', unsafe_allow_html=True)
                 st.markdown("**✦ Retention Playbook & Offer Optimizer**")
                 st.markdown(st.session_state.playbook_text)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # Feature 1: One-Click Customer Reply & Escalation Drafter
             st.markdown("#### ✦ One-Click Customer Reply & Escalation Drafter")
             ticket_options = [
                 f"{row['review_id']} | {row['urgency_class']} | {str(row['review_text'])[:45]}"
@@ -900,7 +907,6 @@ else:
                 st.markdown(st.session_state.reply_draft)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # Feature 2: Interactive "Ask Your Data" Retention Copilot
             st.markdown("#### ✦ Ask Your Data (Retention Copilot)")
             copilot_q = st.text_input(
                 "Ask a question about this batch",
@@ -918,7 +924,6 @@ else:
                 st.markdown(st.session_state.copilot_answer)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # Feature 4: Multimodal Review & Product Defect Photo Inspection
             st.markdown("#### ✦ Defect & Packaging Photo Inspector (Multimodal Gen AI)")
             defect_photo = st.file_uploader(
                 "Upload product defect or packaging photo (optional)",
@@ -942,7 +947,6 @@ else:
                 st.markdown(st.session_state.defect_report)
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # Scored Table & Download
             st.markdown("#### Scored Review Analysis")
             st.dataframe(df_scored.head(25), use_container_width=True)
             csv_bytes = df_scored.to_csv(index=False).encode("utf-8")
