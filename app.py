@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import time
 from google import genai
 from google.genai import types
 import joblib
@@ -16,7 +17,7 @@ st.set_page_config(
 
 DEFAULT_PRICE = 1499.0
 DEFAULT_DAYS = 3.0
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-2.5-flash"]
 
 
 def fmt_int(val):
@@ -254,6 +255,38 @@ def get_gemini_client():
         return None
 
 
+def call_gemini_with_fallback(contents, config=None) -> str | None:
+    client = get_gemini_client()
+    if client is None:
+        return None
+
+    for model_name in GEMINI_MODELS:
+        for attempt in range(2):
+            try:
+                if config is not None:
+                    resp = client.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                        config=config,
+                    )
+                else:
+                    resp = client.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                    )
+                txt = (resp.text or "").strip()
+                if txt:
+                    return txt
+            except Exception as e:
+                err_str = str(e)
+                is_transient = ("503" in err_str) or ("UNAVAILABLE" in err_str) or ("429" in err_str)
+                if is_transient and attempt == 0:
+                    time.sleep(0.8)
+                    continue
+                break
+    return None
+
+
 def _fallback_theme(text: str) -> str:
     t = str(text).lower()
     if any(k in t for k in ["late", "delay", "slow", "tracking", "delivery"]):
@@ -274,11 +307,10 @@ def tag_root_causes_and_chart(scored_df: pd.DataFrame, use_gemini: bool = True) 
     texts = df_out["review_text"].fillna("").astype(str).tolist()
     themes = [_fallback_theme(t) for t in texts]
 
-    client = get_gemini_client() if use_gemini else None
-    if client is not None and len(texts) > 0:
+    if use_gemini and len(texts) > 0 and get_gemini_client() is not None:
         sample_items = [
             {"idx": i, "text": texts[i][:180], "urgency": str(df_out.iloc[i]["urgency_class"])}
-            for i in range(min(len(texts), 40))
+            for i in range(min(len(texts), 30))
         ]
         allowed_themes = [
             "Logistics & Delivery Delay",
@@ -288,40 +320,53 @@ def tag_root_causes_and_chart(scored_df: pd.DataFrame, use_gemini: bool = True) 
             "Support & Refund Friction",
             "Positive / General Feedback",
         ]
-        prompt = f"""
-Classify each item into one of these exact themes: {allowed_themes}.
-Return ONLY a valid JSON list of objects with keys "idx" (int) and "theme" (str).
-Items: {json.dumps(sample_items)}
-""".strip()
-        try:
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            parsed = json.loads(resp.text or "[]")
-            if isinstance(parsed, list):
-                for item in parsed:
-                    idx = item.get("idx")
-                    th = item.get("theme")
-                    if isinstance(idx, int) and 0 <= idx < len(themes) and th in allowed_themes:
-                        themes[idx] = th
-        except Exception:
-            pass
+        prompt = (
+            f"Classify each item into one of these exact themes: {allowed_themes}. "
+            f'Return ONLY a valid JSON list of objects with keys "idx" (int) and "theme" (str). '
+            f"Items: {json.dumps(sample_items)}"
+        )
+        raw_json = call_gemini_with_fallback(
+            prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        )
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        idx = item.get("idx")
+                        th = item.get("theme")
+                        if isinstance(idx, int) and 0 <= idx < len(themes) and th in allowed_themes:
+                            themes[idx] = th
+            except Exception:
+                pass
 
     df_out["root_cause_theme"] = themes
     return df_out
 
 
-def generate_genai_insights(scored_df: pd.DataFrame, summary: dict, file_label: str = "uploaded dataset") -> str:
-    client = get_gemini_client()
-    if client is None:
-        return (
-            f"- **No `GEMINI_API_KEY` found in Secrets.** Showing summary for **{file_label}**.\n"
-            f"- **Escalate {fmt_int(summary.get('high_urgency'))} High-Urgency item(s) first** and follow up on "
-            f"{fmt_int(summary.get('at_risk'))} At-Risk records ({fmt_inr(summary.get('at_risk_revenue_inr'))} elevated exposure)."
-        )
+def _local_insights_fallback(scored_df: pd.DataFrame, summary: dict, file_label: str) -> str:
+    top_theme = "General Feedback"
+    if "root_cause_theme" in scored_df.columns and not scored_df["root_cause_theme"].empty:
+        top_theme = str(scored_df["root_cause_theme"].value_counts().index[0])
 
+    top_cat = "General"
+    if "category" in scored_df.columns and not scored_df["category"].empty:
+        top_cat = str(scored_df["category"].value_counts().index[0])
+
+    return (
+        f"- **Batch Overview ({file_label}):** Scored **{fmt_int(len(scored_df))}** rows — "
+        f"**{fmt_int(summary.get('high_urgency'))}** High Urgency, **{fmt_int(summary.get('at_risk'))}** At Risk, "
+        f"and **{fmt_int(summary.get('low_risk'))}** Low Risk (lead theme: **{top_theme}**, top segment: **{top_cat}**).\n"
+        f"- **Revenue & Churn Exposure:** **{fmt_inr(summary.get('at_risk_revenue_inr'))}** in elevated-risk order/ticket value "
+        f"with an average churn risk of **{fmt_pct(summary.get('avg_churn_pct'))}**.\n"
+        f"- **Immediate Priority:** Resolve High-Urgency complaints first and follow up on At-Risk accounts "
+        f"(estimated goodwill pool: **{fmt_inr(summary.get('total_goodwill_inr'))}**).\n"
+        f"- **Next Step:** Filter high-churn rows below, draft responses for top tickets, or click **✦ Analyze Reviews** again once Gemini capacity clears."
+    )
+
+
+def generate_genai_insights(scored_df: pd.DataFrame, summary: dict, file_label: str = "uploaded dataset") -> str:
     numeric_cols = scored_df.select_dtypes(include=[np.number]).columns.tolist()
     numeric_stats = {}
     for col in numeric_cols[:8]:
@@ -335,7 +380,6 @@ def generate_genai_insights(scored_df: pd.DataFrame, summary: dict, file_label: 
             }
 
     sample_rows = scored_df.head(5).to_dict(orient="records")
-
     prompt = f"""
 You are a retention and business analytics advisor inside RetainCraft.
 Analyze the dataset summary below and return clear, practical business insights and retention recommendations.
@@ -355,31 +399,34 @@ Provide 4 concise bullet points:
 4. Practical next steps to improve retention and outcomes.
 """.strip()
 
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-        )
-        return (response.text or "").strip()
-    except Exception as e:
-        return (
-            f"- **AI insight fallback (`{type(e).__name__}`):** {e}\n"
-            f"- **Escalate {fmt_int(summary.get('high_urgency'))} High-Urgency item(s) first** and follow up on "
-            f"{fmt_int(summary.get('at_risk'))} At-Risk records ({fmt_inr(summary.get('at_risk_revenue_inr'))} elevated exposure)."
-        )
+    ai_text = call_gemini_with_fallback(prompt)
+    return ai_text if ai_text else _local_insights_fallback(scored_df, summary, file_label)
+
+
+def generate_retention_playbook(scored_df: pd.DataFrame, summary: dict) -> str:
+    sample_rows = scored_df.head(6).to_dict(orient="records")
+    prompt = f"""
+Create a concise **Retention Playbook & Offer Strategy** for these triage results.
+Recommend when to use non-monetary retention actions (priority replacement, guided onboarding, loyalty points) vs. goodwill credits so margins stay protected.
+
+Summary: {summary}
+Sample Scored Rows: {sample_rows}
+""".strip()
+
+    ai_text = call_gemini_with_fallback(prompt)
+    if ai_text:
+        return ai_text
+
+    return (
+        f"- **High Urgency ({fmt_int(summary.get('high_urgency'))}):** Trigger immediate replacement/refund or priority callback; "
+        f"cap goodwill credits on high-ticket items to protect margin.\n"
+        f"- **At Risk ({fmt_int(summary.get('at_risk'))}):** Send proactive apology, delivery/fit help, or targeted loyalty/voucher offers "
+        f"across **{fmt_inr(summary.get('at_risk_revenue_inr'))}** in elevated-risk value.\n"
+        f"- **Low Risk ({fmt_int(summary.get('low_risk'))}):** Use low-cost engagement or repeat-purchase nudges rather than discounting."
+    )
 
 
 def draft_customer_and_escalation(row_dict: dict) -> str:
-    client = get_gemini_client()
-    if client is None:
-        return (
-            "**Customer Reply Draft:** We sincerely apologize for the trouble with your recent order "
-            f"({row_dict.get('review_id', 'Ticket')}). Our priority care team is reviewing this now and will follow up shortly.\n\n"
-            "**Internal Escalation Brief:** Urgency="
-            f"{row_dict.get('urgency_class', 'N/A')}, Churn Risk={row_dict.get('churn_risk_pct', 'N/A')}%, "
-            f"Suggested Goodwill={fmt_inr(row_dict.get('goodwill_credit_inr', 0))}."
-        )
-
     prompt = f"""
 You are a customer retention specialist for an e-commerce & marketplace operations team.
 Using this record, write two short sections:
@@ -389,18 +436,20 @@ Using this record, write two short sections:
 Record Details: {row_dict}
 """.strip()
 
-    try:
-        resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        return (resp.text or "").strip()
-    except Exception as e:
-        return f"Could not generate draft (`{type(e).__name__}`): {e}"
+    ai_text = call_gemini_with_fallback(prompt)
+    if ai_text:
+        return ai_text
+
+    return (
+        "**Customer Reply Draft:** We sincerely apologize for the issue with your recent order "
+        f"({row_dict.get('review_id', 'Ticket')}). Our priority care team is reviewing this now and will follow up promptly.\n\n"
+        "**Internal Escalation Brief:** Urgency="
+        f"{row_dict.get('urgency_class', 'N/A')}, Churn Risk={row_dict.get('churn_risk_pct', 'N/A')}%, "
+        f"Suggested Goodwill={fmt_inr(row_dict.get('goodwill_credit_inr', 0))}."
+    )
 
 
 def ask_data_copilot(question: str, scored_df: pd.DataFrame, summary: dict) -> str:
-    client = get_gemini_client()
-    if client is None:
-        return "Add `GEMINI_API_KEY` in Streamlit Secrets to ask AI questions about your scored data."
-
     theme_counts = (
         scored_df["root_cause_theme"].value_counts().to_dict()
         if "root_cause_theme" in scored_df.columns
@@ -424,18 +473,21 @@ Top Categories: {cat_counts}
 Sample Rows: {sample_rows}
 """.strip()
 
-    try:
-        resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        return (resp.text or "").strip()
-    except Exception as e:
-        return f"Copilot response unavailable (`{type(e).__name__}`): {e}"
+    ai_text = call_gemini_with_fallback(prompt)
+    if ai_text:
+        return ai_text
+
+    top_themes_str = ", ".join(f"{k} ({v})" for k, v in list(theme_counts.items())[:3]) or "N/A"
+    return (
+        f"Gemini is temporarily busy right now, so here is a quick summary for **{question}**:\n"
+        f"- **Rows Scored:** {fmt_int(len(scored_df))} ({fmt_int(summary.get('high_urgency'))} High Urgency, "
+        f"{fmt_int(summary.get('at_risk'))} At Risk, {fmt_int(summary.get('low_risk'))} Low Risk)\n"
+        f"- **Elevated Revenue Exposure:** {fmt_inr(summary.get('at_risk_revenue_inr'))} | **Avg Churn Risk:** {fmt_pct(summary.get('avg_churn_pct'))}\n"
+        f"- **Top Themes:** {top_themes_str}"
+    )
 
 
 def inspect_defect_photo_with_gemini(image_bytes: bytes, mime_type: str, context_note: str) -> str:
-    client = get_gemini_client()
-    if client is None:
-        return "Add `GEMINI_API_KEY` in Streamlit Secrets to inspect defect or packaging photos with Gemini."
-
     prompt = f"""
 Inspect this uploaded product/packaging photo alongside the support context below.
 Provide:
@@ -446,42 +498,19 @@ Provide:
 Context: {context_note or "Customer defect/review inspection"}
 """.strip()
 
-    try:
-        resp = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                prompt,
-            ],
-        )
-        return (resp.text or "").strip()
-    except Exception as e:
-        return f"Image inspection unavailable (`{type(e).__name__}`): {e}"
+    ai_text = call_gemini_with_fallback(
+        [
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            prompt,
+        ]
+    )
+    if ai_text:
+        return ai_text
 
-
-def generate_retention_playbook(scored_df: pd.DataFrame, summary: dict) -> str:
-    client = get_gemini_client()
-    if client is None:
-        return (
-            "- **High Urgency:** Offer immediate replacement/refund + capped goodwill credit and priority callback.\n"
-            "- **At Risk:** Send proactive apology, delivery/fit help, and a targeted loyalty/voucher offer.\n"
-            "- **Low Risk:** Reinforce satisfaction with a reward point nudge or repeat-purchase prompt."
-        )
-
-    sample_rows = scored_df.head(6).to_dict(orient="records")
-    prompt = f"""
-Create a concise **Retention Playbook & Offer Strategy** for these triage results.
-Recommend when to use non-monetary retention actions (priority replacement, guided onboarding, loyalty points) vs. goodwill credits so margins stay protected.
-
-Summary: {summary}
-Sample Scored Rows: {sample_rows}
-""".strip()
-
-    try:
-        resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        return (resp.text or "").strip()
-    except Exception as e:
-        return f"Playbook generation fallback (`{type(e).__name__}`): {e}"
+    return (
+        "Gemini vision is temporarily experiencing high demand. Please retry **Inspect Defect Photo** in a moment, "
+        f"or log context (`{context_note or 'No note provided'}`) alongside the photo for manual QA review."
+    )
 
 
 ROBOT_CART_SVG = """
