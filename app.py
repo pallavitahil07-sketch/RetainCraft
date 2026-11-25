@@ -16,6 +16,7 @@ st.set_page_config(
 
 DEFAULT_PRICE = 1499.0
 DEFAULT_DAYS = 3.0
+GEMINI_MODEL = "gemini-3.8-flash"
 
 
 def fmt_int(val):
@@ -294,7 +295,7 @@ Items: {json.dumps(sample_items)}
 """.strip()
         try:
             resp = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=GEMINI_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
@@ -356,7 +357,7 @@ Provide 4 concise bullet points:
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=GEMINI_MODEL,
             contents=prompt,
         )
         return (response.text or "").strip()
@@ -389,7 +390,7 @@ Record Details: {row_dict}
 """.strip()
 
     try:
-        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
         return (resp.text or "").strip()
     except Exception as e:
         return f"Could not generate draft (`{type(e).__name__}`): {e}"
@@ -424,7 +425,7 @@ Sample Rows: {sample_rows}
 """.strip()
 
     try:
-        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
         return (resp.text or "").strip()
     except Exception as e:
         return f"Copilot response unavailable (`{type(e).__name__}`): {e}"
@@ -447,7 +448,7 @@ Context: {context_note or "Customer defect/review inspection"}
 
     try:
         resp = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=GEMINI_MODEL,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
                 prompt,
@@ -477,7 +478,7 @@ Sample Scored Rows: {sample_rows}
 """.strip()
 
     try:
-        resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
         return (resp.text or "").strip()
     except Exception as e:
         return f"Playbook generation fallback (`{type(e).__name__}`): {e}"
@@ -719,7 +720,7 @@ elif st.session_state.active_tab == "Insights":
             st.markdown("### Root-Cause Theme Breakdown")
             st.bar_chart(st.session_state.scored_table["root_cause_theme"].value_counts())
         st.markdown("### Scored Data Table")
-        st.dataframe(st.session_state.scored_table, use_container_width=True)
+        st.dataframe(st.session_state.scored_table, width="stretch")
         csv_bytes = st.session_state.scored_table.to_csv(index=False).encode("utf-8")
         st.download_button(
             label="Download Scored CSV",
@@ -948,7 +949,7 @@ else:
                 st.markdown("</div>", unsafe_allow_html=True)
 
             st.markdown("#### Scored Review Analysis")
-            st.dataframe(df_scored.head(25), use_container_width=True)
+            st.dataframe(df_scored.head(25), width="stretch")
             csv_bytes = df_scored.to_csv(index=False).encode("utf-8")
             st.download_button(
                 label="Download Full Scored CSV",
