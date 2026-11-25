@@ -8,6 +8,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(
     page_title="RetainCraft",
@@ -349,33 +350,33 @@ def build_category_scorecards(scored_df: pd.DataFrame) -> list[dict]:
     theme_specs = [
         (
             "Logistics & Delivery Delay",
-            "On-time delivery, tracking speed, and fulfillment timeliness.",
-            "Delays & late dispatch lower satisfaction; faster transit lifts retention.",
+            "Delivery speed, tracking updates, and dispatch timing.",
+            "Timely arrivals keep repeat orders steady; delays raise churn.",
         ),
         (
             "Damaged / Defective Item",
-            "Physical condition, leak/heat safety, and outer box integrity.",
-            "Damaged or faulty arrivals drive immediate refunds and high churn.",
+            "Item condition, safety, and outer packaging integrity.",
+            "Damaged or faulty goods need quick replacement to save trust.",
         ),
         (
             "Authenticity / Fulfillment Mismatch",
-            "Exact item match, completeness, and genuine product trust.",
-            "Wrong or missing items require fast replacement to rebuild trust.",
+            "Exact item match, completeness, and genuine quality.",
+            "Wrong or missing items require fast resolution and verification.",
         ),
         (
             "Product Fit & Build Quality",
-            "Sizing accuracy, sturdiness, and everyday material durability.",
-            "Minor fit or finish friction can often be solved with guidance or exchange.",
+            "Sizing accuracy, sturdiness, and material feel.",
+            "Fit or finish issues can often be solved with exchange or guidance.",
         ),
         (
             "Support & Refund Friction",
-            "Response speed, replacement approval, and refund resolution.",
-            "Slow or refused support turns routine issues into escalations.",
+            "Resolution speed, refund clarity, and support responsiveness.",
+            "Smooth support turns complaints into loyal repeat customers.",
         ),
         (
             "Positive / General Feedback",
-            "Repeat satisfaction, smooth experience, and praise.",
-            "Strong baseline experience worth reinforcing with loyalty nudges.",
+            "Overall satisfaction, smooth delivery, and repeat intent.",
+            "Healthy baseline feedback to reinforce with loyalty nudges.",
         ),
     ]
     total = max(len(scored_df), 1)
@@ -413,20 +414,20 @@ def build_strengths_and_complaints(scored_df: pd.DataFrame) -> tuple[list[str], 
         if clean:
             strengths.append(clean[:110])
     if not strengths:
-        strengths = ["Consistent on-time fulfillment across low-risk orders."]
+        strengths = ["Consistent fulfillment across low-risk rows."]
 
     complaints = []
     if "root_cause_theme" in risk_df.columns and not risk_df.empty:
         for th, cnt in risk_df["root_cause_theme"].value_counts().head(4).items():
             if th != "Positive / General Feedback":
-                complaints.append(f"{th} ({int(cnt)} elevated-risk items)")
+                complaints.append(f"{th} ({int(cnt)})")
     if not complaints:
         for txt in risk_df["review_text"].dropna().astype(str).head(4):
             clean = txt.strip()
             if clean:
                 complaints.append(clean[:110])
     if not complaints:
-        complaints = ["No major elevated-risk complaints detected in this batch."]
+        complaints = ["No elevated-risk complaints in this batch."]
 
     return strengths, complaints
 
@@ -440,7 +441,7 @@ def _local_insights_fallback(scored_df: pd.DataFrame, summary: dict, file_label:
         f"- **Batch ({file_label}):** {fmt_int(len(scored_df))} rows — "
         f"{fmt_int(summary.get('high_urgency'))} High Urgency, {fmt_int(summary.get('at_risk'))} At Risk, "
         f"{fmt_int(summary.get('low_risk'))} Low Risk (top theme: {top_theme}).\n"
-        f"- **Exposure:** {fmt_inr(summary.get('at_risk_revenue_inr'))} at-risk order value; "
+        f"- **Exposure:** {fmt_inr(summary.get('at_risk_revenue_inr'))} at-risk value; "
         f"{fmt_pct(summary.get('avg_churn_pct'))} avg churn risk; "
         f"{fmt_inr(summary.get('total_goodwill_inr'))} goodwill pool."
     )
@@ -462,7 +463,7 @@ def generate_genai_insights(scored_df: pd.DataFrame, summary: dict, file_label: 
     sample_rows = scored_df.head(5).to_dict(orient="records")
     prompt = f"""
 Analyze this customer review & retention batch and return 4 concise bullet points:
-1. Main patterns across customer feedback and ratings/metrics.
+1. Main patterns across customer feedback and metrics.
 2. Key complaint and churn risk drivers.
 3. Priority support & retention actions.
 4. Practical next steps for the team.
@@ -493,8 +494,8 @@ Sample Rows: {sample_rows}
         return ai_text
 
     return (
-        f"- **High Urgency ({fmt_int(summary.get('high_urgency'))}):** Fast replacement/refund + priority callback with capped goodwill.\n"
-        f"- **At Risk ({fmt_int(summary.get('at_risk'))}):** Proactive follow-up, delivery/fit resolution, and targeted loyalty offer.\n"
+        f"- **High Urgency ({fmt_int(summary.get('high_urgency'))}):** Fast replacement/refund + priority follow-up with capped goodwill.\n"
+        f"- **At Risk ({fmt_int(summary.get('at_risk'))}):** Proactive outreach, delivery/fit fix, and targeted loyalty offer.\n"
         f"- **Low Risk ({fmt_int(summary.get('low_risk'))}):** Low-cost repeat-purchase or loyalty nudge."
     )
 
@@ -578,87 +579,146 @@ Context: {context_note or "Defect/packaging check"}
         return ai_text
 
     return (
-        "Unable to reach Gemini vision right now. Please try **Inspect Defect Photo** again shortly "
+        "Unable to reach Gemini vision right now. Please try **Inspect Photo** again shortly "
         f"({context_note or 'no extra note'})."
     )
 
 
-ROBOT_BASKET_ANIMATED_SVG = """
-<div class="basket-stage">
-  <svg viewBox="0 0 380 220" width="100%" height="215" xmlns="http://www.w3.org/2000/svg">
-    <defs>
+def render_robot_basket_widget(boost: bool = False):
+    boost_js = "true" if boost else "false"
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
       <style>
-        @keyframes basketGlide {
-          0%, 100% { transform: translateX(0px) translateY(0px); }
-          50% { transform: translateX(8px) translateY(-3px); }
-        }
-        @keyframes starTwinkle {
-          0%, 100% { transform: translateY(0px) scale(1); opacity: 0.9; }
-          50% { transform: translateY(-5px) scale(1.12); opacity: 1; }
-        }
-        @keyframes barPulse {
-          0%, 100% { transform: scaleY(1); }
-          50% { transform: scaleY(1.08); }
-        }
-        .robot-basket-group {
-          animation: basketGlide 2.6s ease-in-out infinite;
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+          background: transparent;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 220px;
+          overflow: hidden;
+          font-family: system-ui, -apple-system, sans-serif;
+        }}
+        .stage {{
+          position: relative;
+          width: 100%;
+          max-width: 420px;
+          height: 210px;
+          border-radius: 20px;
+          background: radial-gradient(circle at 60% 45%, rgba(164, 108, 66, 0.16), rgba(251, 248, 244, 0));
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+        }}
+        @keyframes glide {{
+          0%, 100% {{ transform: translateX(0px) translateY(0px); }}
+          50% {{ transform: translateX(10px) translateY(-3px); }}
+        }}
+        @keyframes wheelSpin {{
+          0% {{ transform: rotate(0deg); }}
+          100% {{ transform: rotate(360deg); }}
+        }}
+        @keyframes floatStar {{
+          0%, 100% {{ transform: translateY(0px) scale(1); opacity: 0.9; }}
+          50% {{ transform: translateY(-6px) scale(1.15); opacity: 1; }}
+        }}
+        @keyframes burstMove {{
+          0% {{ transform: translateX(0px) rotate(0deg) scale(1); }}
+          25% {{ transform: translateX(18px) rotate(3deg) scale(1.05); }}
+          50% {{ transform: translateX(-10px) rotate(-3deg) scale(1.02); }}
+          75% {{ transform: translateX(14px) rotate(2deg) scale(1.04); }}
+          100% {{ transform: translateX(0px) rotate(0deg) scale(1); }}
+        }}
+        .mover {{
+          animation: glide 2.5s ease-in-out infinite;
           transform-origin: center;
-        }
-        .star-badge {
-          animation: starTwinkle 2.2s ease-in-out infinite;
-          transform-origin: center;
-        }
-        .trend-bar {
-          animation: barPulse 2.4s ease-in-out infinite;
+        }}
+        .stage.burst .mover {{
+          animation: burstMove 0.85s ease-in-out 2;
+        }}
+        .wheel {{
           transform-box: fill-box;
-          transform-origin: bottom;
-        }
+          transform-origin: center;
+          animation: wheelSpin 2.2s linear infinite;
+        }}
+        .spark {{
+          transform-box: fill-box;
+          transform-origin: center;
+          animation: floatStar 2.1s ease-in-out infinite;
+        }}
       </style>
-    </defs>
+    </head>
+    <body>
+      <div id="stage" class="stage" onclick="triggerBurst()">
+        <svg viewBox="0 0 400 210" width="100%" height="205" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="200" cy="188" rx="145" ry="11" fill="#5C3317" opacity="0.14"/>
 
-    <!-- Soft warm halo -->
-    <ellipse cx="195" cy="196" rx="135" ry="12" fill="#E05A47" opacity="0.14"/>
+          <!-- Floating brown & caramel stars -->
+          <g class="spark" fill="#C86D3B">
+            <polygon points="135,24 138,31 145,31 139,35 141,42 135,38 129,42 131,35 125,31 132,31"/>
+            <polygon points="162,16 165,23 172,23 166,27 168,34 162,30 156,34 158,27 152,23 159,23"/>
+            <polygon points="189,24 192,31 199,31 193,35 195,42 189,38 183,42 185,35 179,31 186,31"/>
+          </g>
 
-    <!-- Floating stars -->
-    <g class="star-badge" fill="#E05A47">
-      <polygon points="150,24 153,31 160,31 154,35 156,42 150,38 144,42 146,35 140,31 147,31"/>
-      <polygon points="174,18 177,25 184,25 178,29 180,36 174,32 168,36 170,29 164,25 171,25"/>
-      <polygon points="198,24 201,31 208,31 202,35 204,42 198,38 192,42 194,35 188,31 195,31"/>
-    </g>
+          <g class="mover">
+            <!-- Friendly Espresso & Cream Robot -->
+            <line x1="242" y1="42" x2="242" y2="62" stroke="#2B1810" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="242" cy="39" r="5.5" fill="#C86D3B"/>
+            <rect x="205" y="62" width="74" height="56" rx="18" fill="#2B1810"/>
+            <rect x="214" y="71" width="56" height="34" rx="10" fill="#FFFDF9"/>
+            <circle cx="230" cy="87" r="4.5" fill="#7C4722"/>
+            <circle cx="254" cy="87" r="4.5" fill="#7C4722"/>
+            <path d="M234 96 Q242 103 250 96" stroke="#2B1810" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <rect x="216" y="122" width="52" height="28" rx="10" fill="#E6D7C3" stroke="#2B1810" stroke-width="2"/>
 
-    <g class="robot-basket-group">
-      <!-- Friendly Robot -->
-      <line x1="226" y1="48" x2="226" y2="68" stroke="#18221F" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="226" cy="45" r="5" fill="#E05A47"/>
-      <rect x="192" y="68" width="68" height="54" rx="18" fill="#18221F"/>
-      <rect x="200" y="77" width="52" height="32" rx="10" fill="#FFFDF9"/>
-      <circle cx="215" cy="92" r="4.5" fill="#15803D"/>
-      <circle cx="237" cy="92" r="4.5" fill="#15803D"/>
-      <path d="M218 101 Q226 107 234 101" stroke="#18221F" stroke-width="2.5" fill="none" stroke-linecap="round"/>
-      <rect x="202" y="126" width="48" height="26" rx="10" fill="#E8E2D9" stroke="#18221F" stroke-width="2"/>
+            <!-- Robot arm handling basket -->
+            <path d="M216 135 L182 148" stroke="#2B1810" stroke-width="4" stroke-linecap="round"/>
 
-      <!-- Robot arm guiding basket -->
-      <path d="M202 138 L172 152" stroke="#18221F" stroke-width="4" stroke-linecap="round"/>
+            <!-- Shopping Basket -->
+            <path d="M95 138 L186 138 L175 174 L106 174 Z" fill="#8C4A27" stroke="#2B1810" stroke-width="2.2"/>
+            <path d="M108 138 Q140 108 172 138" stroke="#2B1810" stroke-width="2.5" fill="none"/>
+            <line x1="118" y1="144" x2="122" y2="168" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
+            <line x1="140" y1="144" x2="140" y2="168" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
+            <line x1="162" y1="144" x2="158" y2="168" stroke="#FFFDF9" stroke-width="2" opacity="0.85"/>
 
-      <!-- Shopping Basket -->
-      <path d="M92 142 L176 142 L166 178 L102 178 Z" fill="#E05A47" stroke="#18221F" stroke-width="2.2"/>
-      <path d="M104 142 Q134 114 164 142" stroke="#18221F" stroke-width="2.5" fill="none"/>
-      <line x1="114" y1="148" x2="118" y2="172" stroke="#FFFDF9" stroke-width="2" opacity="0.8"/>
-      <line x1="134" y1="148" x2="134" y2="172" stroke="#FFFDF9" stroke-width="2" opacity="0.8"/>
-      <line x1="154" y1="148" x2="150" y2="172" stroke="#FFFDF9" stroke-width="2" opacity="0.8"/>
-      <circle cx="112" cy="187" r="7" fill="#18221F"/>
-      <circle cx="156" cy="187" r="7" fill="#18221F"/>
-    </g>
+            <!-- Animated Wheels -->
+            <g class="wheel">
+              <circle cx="116" cy="183" r="7.5" fill="#2B1810"/>
+              <circle cx="116" cy="183" r="2.5" fill="#E6D7C3"/>
+            </g>
+            <g class="wheel">
+              <circle cx="164" cy="183" r="7.5" fill="#2B1810"/>
+              <circle cx="164" cy="183" r="2.5" fill="#E6D7C3"/>
+            </g>
+          </g>
 
-    <!-- Rising analytics bars on the right -->
-    <rect class="trend-bar" x="282" y="144" width="12" height="36" rx="4" fill="#99B8A8"/>
-    <rect class="trend-bar" x="301" y="124" width="12" height="56" rx="4" fill="#4D8B6C"/>
-    <rect class="trend-bar" x="320" y="100" width="12" height="80" rx="4" fill="#15803D"/>
-    <polyline points="280,118 305,96 332,70" fill="none" stroke="#E05A47" stroke-width="3.2" stroke-linecap="round"/>
-    <polygon points="326,68 338,66 335,78" fill="#E05A47"/>
-  </svg>
-</div>
-"""
+          <!-- Warm Brown & Sage Trend Bars -->
+          <rect x="302" y="140" width="12" height="36" rx="4" fill="#C9B7A3"/>
+          <rect x="321" y="120" width="12" height="56" rx="4" fill="#9A6842"/>
+          <rect x="340" y="96" width="12" height="80" rx="4" fill="#5C3317"/>
+          <polyline points="300,114 326,92 353,66" fill="none" stroke="#C86D3B" stroke-width="3.2" stroke-linecap="round"/>
+          <polygon points="347,64 359,62 356,74" fill="#C86D3B"/>
+        </svg>
+      </div>
+      <script>
+        const stage = document.getElementById("stage");
+        function triggerBurst() {{
+          stage.classList.remove("burst");
+          void stage.offsetWidth;
+          stage.classList.add("burst");
+        }}
+        if ({boost_js}) {{
+          triggerBurst();
+        }}
+      </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=220, scrolling=False)
+
 
 for k, v in {
     "scored_table": None,
@@ -679,126 +739,117 @@ for k, v in {
 st.markdown(
     """
     <style>
-    @keyframes fadeSlideUp {
+    @keyframes cacaoReveal {
         0% { opacity: 0; transform: translateY(14px); }
         100% { opacity: 1; transform: translateY(0px); }
     }
-    @keyframes fastBasketSpin {
-        0% { transform: translateX(0px) rotate(0deg) scale(1); }
-        25% { transform: translateX(14px) rotate(2deg) scale(1.04); }
-        50% { transform: translateX(-8px) rotate(-2deg) scale(1.02); }
-        75% { transform: translateX(10px) rotate(1deg) scale(1.04); }
-        100% { transform: translateX(0px) rotate(0deg) scale(1); }
-    }
     .stApp {
-        background: linear-gradient(180deg, #FAF9F7 0%, #F4F1EC 100%);
-        color: #18221F;
+        background: linear-gradient(180deg, #FBF8F4 0%, #F2EAE0 100%);
+        color: #2B1810;
     }
     [data-testid="stHeader"] {
         background: transparent;
     }
-    .anim-enter {
-        animation: fadeSlideUp 0.55s ease-out both;
-    }
-    .basket-stage.boost .robot-basket-group {
-        animation: fastBasketSpin 0.9s ease-in-out 2 !important;
+    .cacao-enter {
+        animation: cacaoReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
     }
     button[data-testid="stBaseButton-secondary"],
     .stButton > button[kind="secondary"] {
-        background: #FFFFFF !important;
-        color: #18221F !important;
-        border: 1px solid #DCD6CC !important;
+        background: #FFFDF9 !important;
+        color: #2B1810 !important;
+        border: 1px solid #D9C9B6 !important;
         border-radius: 999px !important;
         font-weight: 600 !important;
         transition: all 0.18s ease !important;
     }
     button[data-testid="stBaseButton-secondary"]:hover,
     .stButton > button[kind="secondary"]:hover {
-        background: #F2EFE9 !important;
-        border-color: #18221F !important;
+        background: #EFE4D6 !important;
+        border-color: #5C3317 !important;
         transform: translateY(-1px);
     }
     button[data-testid="stBaseButton-primary"],
     .stButton > button[kind="primary"] {
-        background: #E05A47 !important;
-        color: #FFFFFF !important;
-        border: 1px solid #C94937 !important;
+        background: #6E3B1E !important;
+        color: #FFFDF9 !important;
+        border: 1px solid #4E2812 !important;
         border-radius: 999px !important;
         font-weight: 700 !important;
         transition: all 0.18s ease !important;
     }
     button[data-testid="stBaseButton-primary"]:hover,
     .stButton > button[kind="primary"]:hover {
-        background: #C94937 !important;
+        background: #522A14 !important;
         transform: translateY(-1px);
     }
     [data-testid="stTextArea"] textarea,
     [data-testid="stTextInput"] input {
         background-color: #FFFDF9 !important;
-        color: #18221F !important;
-        border: 1px solid #D6CFC4 !important;
+        color: #2B1810 !important;
+        border: 1px solid #D6C5B2 !important;
         border-radius: 12px !important;
     }
     [data-testid="stFileUploaderDropzone"] {
         background-color: #FFFDF9 !important;
-        color: #18221F !important;
-        border: 1.5px dashed #B8B0A4 !important;
+        color: #2B1810 !important;
+        border: 1.5px dashed #B9A288 !important;
         border-radius: 14px !important;
     }
     [data-testid="stFileUploaderDropzone"] button {
-        background-color: #18221F !important;
-        color: #FFFFFF !important;
+        background-color: #2B1810 !important;
+        color: #FFFDF9 !important;
         border: none !important;
         border-radius: 8px !important;
     }
     .brand-wordmark {
-        font-size: 1.3rem;
+        font-size: 1.32rem;
         font-weight: 800;
         letter-spacing: -0.02em;
-        color: #18221F;
+        color: #2B1810;
         padding-top: 6px;
+        animation: cacaoReveal 0.4s ease-out both;
     }
     .brand-hero {
-        font-size: 2.6rem;
+        font-size: 2.75rem;
         font-weight: 800;
         letter-spacing: -0.03em;
-        color: #18221F;
-        padding-top: 28px;
-        animation: fadeSlideUp 0.5s ease-out both;
+        color: #2B1810;
+        padding-top: 26px;
+        animation: cacaoReveal 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
     }
     .surface-card {
-        background: #FFFFFF;
-        border: 1px solid #E6E0D6;
+        background: #FFFDF9;
+        border: 1px solid #E5D8C7;
         border-radius: 18px;
         padding: 20px;
         margin-top: 12px;
-        box-shadow: 0 4px 18px rgba(24, 34, 31, 0.04);
-        animation: fadeSlideUp 0.55s ease-out both;
+        box-shadow: 0 6px 20px rgba(43, 24, 16, 0.05);
+        animation: cacaoReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
     }
     .metric-high {
-        background: #FFF3F1;
-        border: 1px solid #F3C4BC;
+        background: #FDECE8;
+        border: 1px solid #E9B6AA;
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
     }
     .metric-risk {
-        background: #FFF9EB;
-        border: 1px solid #F2DFA7;
+        background: #FDF4E3;
+        border: 1px solid #E8CFA2;
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
     }
     .metric-low {
-        background: #EEF9F2;
-        border: 1px solid #BCE5CA;
+        background: #EEF6EE;
+        border: 1px solid #BBD8BC;
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
     }
     .metric-neutral {
-        background: #FAF8F5;
-        border: 1px solid #E5DFD5;
+        background: #F6EFE6;
+        border: 1px solid #DFD0BE;
         border-radius: 14px;
         padding: 16px;
         margin-bottom: 12px;
@@ -806,45 +857,50 @@ st.markdown(
     .metric-label {
         font-size: 0.85rem;
         font-weight: 700;
-        color: #3A4742;
+        color: #4A3224;
         margin-bottom: 6px;
     }
     .metric-num {
         font-size: 1.75rem;
         font-weight: 800;
-        color: #18221F;
+        color: #2B1810;
         line-height: 1.15;
     }
     .cat-card {
-        background: #FAF8F5;
-        border: 1px solid #E6E0D6;
+        background: #F8F2EA;
+        border: 1px solid #E3D5C3;
         border-radius: 14px;
         padding: 14px;
         margin-bottom: 10px;
+        transition: transform 0.16s ease, border-color 0.16s ease;
+    }
+    .cat-card:hover {
+        transform: translateY(-2px);
+        border-color: #8C4A27;
     }
     .cat-header {
         display: flex;
         justify-content: space-between;
         font-weight: 700;
-        color: #18221F;
+        color: #2B1810;
         margin-bottom: 4px;
     }
     .cat-score {
         font-weight: 800;
-        color: #E05A47;
+        color: #8C4A27;
     }
     .cat-desc {
         font-size: 0.86rem;
-        color: #4B5853;
+        color: #564134;
         line-height: 1.45;
     }
     .info-box {
-        background: #FAF8F5;
-        border: 1px solid #E6E0D6;
+        background: #F8F2EA;
+        border: 1px solid #E3D5C3;
         border-radius: 14px;
         padding: 16px;
         margin-top: 8px;
-        color: #18221F;
+        color: #2B1810;
     }
     </style>
     """,
@@ -872,7 +928,7 @@ st.markdown("---")
 if st.session_state.active_tab == "About":
     st.markdown('<div class="surface-card">', unsafe_allow_html=True)
     st.subheader("RetainCraft")
-    st.write("Review triage, category scoring, retention playbooks, and AI workflows.")
+    st.write("Review triage, category scorecards, retention playbooks, and AI workflows.")
     st.markdown("</div>", unsafe_allow_html=True)
 elif st.session_state.active_tab == "How It Works":
     st.markdown('<div class="surface-card">', unsafe_allow_html=True)
@@ -886,7 +942,7 @@ elif st.session_state.active_tab == "Insights":
         if st.session_state.get("genai_insights"):
             st.markdown(st.session_state.genai_insights)
         if "root_cause_theme" in st.session_state.scored_table.columns:
-            st.bar_chart(st.session_state.scored_table["root_cause_theme"].value_counts())
+            st.bar_chart(st.session_state.scored_table["root_cause_theme"].value_counts(), color="#8C4A27")
         st.dataframe(st.session_state.scored_table, width="stretch")
         st.download_button(
             label="Download Scored CSV",
@@ -904,8 +960,8 @@ else:
         if st.button("Animate Basket", key="btn_animate_basket"):
             st.session_state.basket_boost = not st.session_state.basket_boost
     with hero_right:
-        boost_class = "basket-stage boost" if st.session_state.basket_boost else "basket-stage"
-        st.markdown(ROBOT_BASKET_ANIMATED_SVG.replace('class="basket-stage"', f'class="{boost_class}"'), unsafe_allow_html=True)
+        render_robot_basket_widget(boost=bool(st.session_state.basket_boost))
+        st.session_state.basket_boost = False
 
     left_box, right_box = st.columns([1.0, 1.2], gap="large")
 
@@ -924,7 +980,6 @@ else:
             st.session_state.uploaded_name = uploaded_csv.name
             st.caption(f"{uploaded_csv.name} ({len(df_loaded)} rows)")
 
-        # Left-column snapshot so left side stays balanced and informative
         if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
             df_s = st.session_state.scored_table
             top_cat = str(df_s["category"].value_counts().index[0]) if "category" in df_s.columns else "—"
@@ -1016,12 +1071,11 @@ else:
     if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
         df_scored = st.session_state.scored_table
 
-        # Row A: Chart + Strengths vs Complaints
         row_a_left, row_a_right = st.columns([1.1, 1.0], gap="large")
         with row_a_left:
             st.markdown('<div class="surface-card">', unsafe_allow_html=True)
             if "root_cause_theme" in df_scored.columns:
-                st.bar_chart(df_scored["root_cause_theme"].value_counts(), color="#E05A47")
+                st.bar_chart(df_scored["root_cause_theme"].value_counts(), color="#8C4A27")
             st.markdown("</div>", unsafe_allow_html=True)
         with row_a_right:
             st.markdown('<div class="surface-card">', unsafe_allow_html=True)
@@ -1037,7 +1091,6 @@ else:
                     st.markdown(f"- {item}")
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Row B: Cacao-style Category Scorecards
         st.markdown('<div class="surface-card">', unsafe_allow_html=True)
         cards = build_category_scorecards(df_scored)
         for idx in range(0, len(cards), 2):
@@ -1056,7 +1109,6 @@ else:
                         )
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Row C: Retention Playbook + Reply Drafter
         row_c_left, row_c_right = st.columns(2, gap="large")
         with row_c_left:
             st.markdown('<div class="surface-card">', unsafe_allow_html=True)
@@ -1081,7 +1133,6 @@ else:
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Row D: Ask Your Data Copilot + Defect Photo Inspector
         row_d_left, row_d_right = st.columns(2, gap="large")
         with row_d_left:
             st.markdown('<div class="surface-card">', unsafe_allow_html=True)
@@ -1120,7 +1171,6 @@ else:
                 st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Row E: Scored Table + Download
         st.markdown('<div class="surface-card">', unsafe_allow_html=True)
         st.dataframe(df_scored.head(25), width="stretch")
         st.download_button(
