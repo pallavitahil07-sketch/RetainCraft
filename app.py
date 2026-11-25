@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+from google import genai
 import joblib
 import numpy as np
 import pandas as pd
@@ -42,57 +44,98 @@ def fmt_pct(val):
 def load_triage_model():
     model_path = Path("retaincraft_triage_model.joblib")
     if model_path.exists():
-        return joblib.load(model_path)
+        try:
+            return joblib.load(model_path)
+        except Exception:
+            return None
+    return None
+
+
+def _find_best_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    lower_map = {str(c).strip().lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand.lower() in lower_map:
+            return lower_map[cand.lower()]
+    for col in df.columns:
+        col_l = str(col).strip().lower()
+        if any(cand.lower() in col_l for cand in candidates):
+            return col
     return None
 
 
 def score_reviews_dataframe(df_in: pd.DataFrame):
     df_work = df_in.copy()
+    n_rows = len(df_work)
 
-    review_col = next(
-        (c for c in ["review_text", "review", "text", "comment", "feedback"] if c in df_work.columns),
-        None,
+    if n_rows == 0:
+        empty_summary = {
+            "high_urgency": 0,
+            "at_risk": 0,
+            "low_risk": 0,
+            "at_risk_revenue_inr": 0.0,
+            "avg_churn_pct": 0.0,
+            "total_goodwill_inr": 0.0,
+        }
+        return df_work, empty_summary
+
+    # 1. Auto-detect review / text column across any CSV schema
+    text_col = _find_best_column(
+        df_work,
+        [
+            "review_text", "review", "feedback", "comment", "comments",
+            "text", "body", "message", "description", "summary", "title", "notes",
+        ],
     )
-    if review_col is None:
-        df_work["review_text"] = ""
-    elif review_col != "review_text":
-        df_work["review_text"] = df_work[review_col]
+    if text_col is not None:
+        review_series = df_work[text_col].fillna("").astype(str)
+    else:
+        obj_cols = df_work.select_dtypes(include=["object", "string"]).columns.tolist()
+        if obj_cols:
+            review_series = (
+                df_work[obj_cols].fillna("").astype(str).agg(" - ".join, axis=1).str.strip(" -")
+            )
+        else:
+            review_series = pd.Series([f"Row {i + 1}" for i in range(n_rows)], index=df_work.index)
 
-    df_work["review_text"] = df_work["review_text"].fillna("").astype(str)
+    df_work["review_text"] = review_series
 
     if "review_id" not in df_work.columns:
-        df_work["review_id"] = [f"REV-{i + 1:04d}" for i in range(len(df_work))]
+        df_work["review_id"] = [f"REV-{i + 1:04d}" for i in range(n_rows)]
 
-    price_col = next(
-        (c for c in ["price_inr", "order_value", "price", "amount"] if c in df_work.columns),
-        None,
+    # 2. Auto-detect numeric order / price / amount column
+    price_col = _find_best_column(
+        df_work,
+        ["price_inr", "order_value", "amount", "price", "revenue", "total", "cost", "fare", "value"],
     )
-    raw_prices = (
-        df_work[price_col]
-        if price_col is not None
-        else pd.Series(DEFAULT_PRICE, index=df_work.index, dtype="float64")
-    )
-    prices_series = pd.to_numeric(raw_prices, errors="coerce").fillna(DEFAULT_PRICE)
+    if price_col is not None:
+        prices_series = pd.to_numeric(df_work[price_col], errors="coerce").fillna(DEFAULT_PRICE)
+    else:
+        num_cols = df_work.select_dtypes(include=[np.number]).columns.tolist()
+        if num_cols:
+            prices_series = pd.to_numeric(df_work[num_cols[0]], errors="coerce").abs().fillna(DEFAULT_PRICE)
+        else:
+            prices_series = pd.Series(DEFAULT_PRICE, index=df_work.index, dtype="float64")
 
-    days_col = next(
-        (c for c in ["days_since_delivery", "delivery_days", "days"] if c in df_work.columns),
-        None,
+    # 3. Auto-detect numeric days / delivery / delay / tenure column
+    days_col = _find_best_column(
+        df_work,
+        ["days_since_delivery", "delivery_days", "days", "delay", "tat", "age", "tenure"],
     )
-    raw_days = (
-        df_work[days_col]
-        if days_col is not None
-        else pd.Series(DEFAULT_DAYS, index=df_work.index, dtype="float64")
-    )
-    days_series = pd.to_numeric(raw_days, errors="coerce").fillna(DEFAULT_DAYS)
+    if days_col is not None:
+        days_series = pd.to_numeric(df_work[days_col], errors="coerce").fillna(DEFAULT_DAYS)
+    else:
+        days_series = pd.Series(DEFAULT_DAYS, index=df_work.index, dtype="float64")
 
-    cat_col = next((c for c in ["category", "product_category"] if c in df_work.columns), None)
+    cat_col = _find_best_column(
+        df_work, ["category", "product_category", "segment", "type", "department", "plan"]
+    )
     category_series = (
         df_work[cat_col].fillna("General").astype(str)
         if cat_col is not None
         else pd.Series("General", index=df_work.index)
     )
 
-    city_col = next((c for c in ["city", "location"] if c in df_work.columns), None)
+    city_col = _find_best_column(df_work, ["city", "location", "region", "state", "country"])
     city_series = (
         df_work[city_col].fillna("Bengaluru").astype(str)
         if city_col is not None
@@ -104,20 +147,19 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
     df_work["category"] = category_series
     df_work["city"] = city_series
 
+    # 4. Safe call to trained triage model
     model = load_triage_model()
-    n_rows = len(df_work)
-
     urgency_labels = []
     churn_risk_pct = None
 
-    if model is not None and n_rows > 0:
+    if model is not None:
         try:
             preds = model.predict(df_work)
-            pred_list = [str(p).strip().lower() for p in preds]
-            for p in pred_list:
-                if "high" in p or p in {"2", "urgent", "critical"}:
+            for p in preds:
+                p_str = str(p).strip().lower()
+                if "high" in p_str or p_str in {"2", "urgent", "critical"}:
                     urgency_labels.append("High Urgency")
-                elif "risk" in p or "med" in p or p in {"1", "at_risk", "at risk"}:
+                elif "risk" in p_str or "med" in p_str or p_str in {"1", "at_risk", "at risk"}:
                     urgency_labels.append("At Risk")
                 else:
                     urgency_labels.append("Low Risk")
@@ -129,18 +171,20 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
         if hasattr(model, "predict_proba"):
             try:
                 probs = model.predict_proba(df_work)
-                max_probs = np.max(probs, axis=1)
-                churn_risk_pct = np.clip(np.round(max_probs * 100, 1), 1.0, 99.0)
+                if len(probs) == n_rows:
+                    max_probs = np.max(probs, axis=1)
+                    churn_risk_pct = np.clip(np.round(max_probs * 100, 1), 1.0, 99.0)
             except Exception:
                 churn_risk_pct = None
 
+    # 5. Safe fallback triage when model doesn't match custom CSV columns
     if not urgency_labels:
         urgent_words = (
             "broken", "damaged", "late", "delay", "refund", "fake", "counterfeit",
-            "heat", "burnt", "worst", "missing", "leaking", "horrible", "refused",
+            "heat", "burnt", "worst", "missing", "leaking", "horrible", "refused", "error", "fail",
         )
         risk_words = (
-            "dull", "tight", "average", "flimsy", "missing", "delay", "okay", "dented", "slow",
+            "dull", "tight", "average", "flimsy", "missing", "delay", "okay", "dented", "slow", "issue",
         )
         urgency_labels = []
         for txt, d_days in zip(df_work["review_text"].str.lower(), df_work["days_since_delivery"]):
@@ -157,10 +201,11 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
 
     goodwill_inr = []
     for lbl, price in zip(urgency_labels, df_work["price_inr"]):
+        p_val = float(price) if pd.notna(price) else DEFAULT_PRICE
         if lbl == "High Urgency":
-            goodwill_inr.append(round(min(max(price * 0.20, 150.0), 1500.0)))
+            goodwill_inr.append(round(min(max(p_val * 0.20, 150.0), 1500.0)))
         elif lbl == "At Risk":
-            goodwill_inr.append(round(min(max(price * 0.10, 75.0), 750.0)))
+            goodwill_inr.append(round(min(max(p_val * 0.10, 75.0), 750.0)))
         else:
             goodwill_inr.append(0)
 
@@ -186,6 +231,75 @@ def score_reviews_dataframe(df_in: pd.DataFrame):
         "total_goodwill_inr": total_goodwill_inr,
     }
     return df_work, summary
+
+
+def get_gemini_client():
+    api_key = None
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        api_key = None
+    if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
+
+def generate_genai_insights(scored_df: pd.DataFrame, summary: dict, file_label: str = "uploaded dataset") -> str:
+    client = get_gemini_client()
+    if client is None:
+        return (
+            "- **Gemini API key not detected yet:** Make sure `GEMINI_API_KEY` is saved in Streamlit Secrets and wait ~1 minute to apply.\n"
+            f"- **Triage Summary ({file_label}):** {fmt_int(summary.get('high_urgency'))} High Urgency, "
+            f"{fmt_int(summary.get('at_risk'))} At Risk, and {fmt_int(summary.get('low_risk'))} Low Risk rows scored."
+        )
+
+    numeric_cols = scored_df.select_dtypes(include=[np.number]).columns.tolist()
+    numeric_stats = {}
+    for col in numeric_cols[:8]:
+        s = pd.to_numeric(scored_df[col], errors="coerce").dropna()
+        if not s.empty:
+            numeric_stats[col] = {
+                "mean": round(float(s.mean()), 2),
+                "min": round(float(s.min()), 2),
+                "max": round(float(s.max()), 2),
+                "sum": round(float(s.sum()), 2),
+            }
+
+    sample_rows = scored_df.head(5).to_dict(orient="records")
+
+    prompt = f"""
+You are a retention and business analytics advisor inside RetainCraft.
+Analyze the dataset summary below and return clear, practical business insights and retention recommendations.
+Adapt naturally to whatever columns and domain exist in this dataset.
+
+Dataset Source: {file_label}
+Total Rows Scored: {len(scored_df)}
+Columns: {list(scored_df.columns)}
+Triage Summary: {summary}
+Numeric Column Stats: {numeric_stats}
+Sample Rows (up to 5): {sample_rows}
+
+Provide 4 concise bullet points:
+1. Key patterns or standout findings in this data.
+2. Main risk areas (churn, delays, complaints, or revenue exposure).
+3. Immediate priority retention & customer support actions.
+4. Practical next steps to improve retention and outcomes.
+""".strip()
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return (response.text or "").strip()
+    except Exception as e:
+        return (
+            f"- **AI insight fallback (`{type(e).__name__}`):** Showing core triage summary for **{file_label}**.\n"
+            f"- **Escalate {fmt_int(summary.get('high_urgency'))} High-Urgency item(s) first** and follow up on "
+            f"{fmt_int(summary.get('at_risk'))} At-Risk records ({fmt_inr(summary.get('at_risk_revenue_inr'))} elevated exposure)."
+        )
 
 
 ROBOT_CART_SVG = """
@@ -225,6 +339,8 @@ if "scored_table" not in st.session_state:
     st.session_state.scored_table = None
 if "scored_summary" not in st.session_state:
     st.session_state.scored_summary = None
+if "genai_insights" not in st.session_state:
+    st.session_state.genai_insights = None
 if "uploaded_df" not in st.session_state:
     st.session_state.uploaded_df = None
 if "uploaded_name" not in st.session_state:
@@ -392,42 +508,46 @@ with n4:
     if st.button("Insights", use_container_width=True):
         st.session_state.active_tab = "Insights"
 with r_badge:
-    st.markdown('<div class="right-badge">✦ Built with ♥ using ML</div>', unsafe_allow_html=True)
+    st.markdown('<div class="right-badge">✦ Built with ♥ using ML & Gen AI</div>', unsafe_allow_html=True)
 
 st.markdown("---")
 
 if st.session_state.active_tab == "About":
     st.subheader("About RetainCraft")
     st.write(
-        "RetainCraft turns customer reviews and order context into prioritized retention queues—classifying "
-        "High Urgency, At Risk, and Low Risk items while estimating at-risk revenue and goodwill credits."
+        "RetainCraft combines your ML triage model with Gemini Gen AI to analyze customer reviews or "
+        "any uploaded CSV dataset—surfacing urgency queues, at-risk value, and tailored business insights."
     )
 elif st.session_state.active_tab == "How It Works":
     st.subheader("How It Works")
     st.write(
-        "1. Paste customer reviews (one per line) or upload a CSV file.\n"
-        "2. Click **✦ Analyze Reviews** to score urgency, churn risk, and retention actions.\n"
-        "3. Open **Insights** or scroll below **Retention & Action Suggestions** to inspect and download scored rows."
+        "1. Paste reviews (one per line) or upload any CSV file.\n"
+        "2. Click **✦ Analyze Reviews** to score urgency, churn risk, and retention exposure.\n"
+        "3. View Gen AI business insights and scored rows right on Home or inside **Insights**."
     )
 elif st.session_state.active_tab == "Insights":
-    st.subheader("Scored Queue & Retention Insights")
+    st.subheader("Scored Queue & AI Business Insights")
     if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
+        if st.session_state.get("genai_insights"):
+            st.markdown("### ✦ Gen AI Business Insights")
+            st.markdown(st.session_state.genai_insights)
+        st.markdown("### Scored Data Table")
         st.dataframe(st.session_state.scored_table, use_container_width=True)
         csv_bytes = st.session_state.scored_table.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="Download Scored Reviews CSV",
+            label="Download Scored CSV",
             data=csv_bytes,
-            file_name="retaincraft_scored_reviews.csv",
+            file_name="retaincraft_scored_output.csv",
             mime="text/csv",
         )
     else:
-        st.info("No reviews analyzed yet. Go to Home, paste reviews or upload a CSV, and click Analyze Reviews.")
+        st.info("No dataset analyzed yet. Go to Home, paste reviews or upload any CSV, and click Analyze Reviews.")
 else:
     hero_left, hero_right = st.columns([1.4, 1.0], gap="large")
     with hero_left:
         st.markdown('<div class="hero-title">RetainCraft –<br>Review Triage & Retention Studio</div>', unsafe_allow_html=True)
         st.markdown(
-            '<div class="hero-sub">Turn customer reviews into actionable insights —<br>prioritize issues, reduce churn, and keep more customers.</div>',
+            '<div class="hero-sub">Turn customer reviews & CSV datasets into actionable insights —<br>prioritize issues, reduce churn, and keep more customers.</div>',
             unsafe_allow_html=True,
         )
         cta1, cta2, _ = st.columns([1.2, 1.2, 1.6])
@@ -445,7 +565,7 @@ else:
     with left_box:
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.markdown("### ✦ Paste Your Reviews")
-        st.caption("Add customer reviews or upload a CSV file")
+        st.caption("Add customer reviews or upload any CSV file")
         pasted_text = st.text_area(
             "Enter reviews here... (one per line)",
             height=165,
@@ -471,6 +591,11 @@ else:
                 scored_df, summary = score_reviews_dataframe(st.session_state.uploaded_df)
                 st.session_state.scored_table = scored_df
                 st.session_state.scored_summary = summary
+                st.session_state.genai_insights = generate_genai_insights(
+                    scored_df,
+                    summary,
+                    st.session_state.get("uploaded_name") or "Uploaded CSV",
+                )
             else:
                 lines = [line.strip() for line in pasted_text.splitlines() if line.strip()]
                 if lines:
@@ -478,9 +603,15 @@ else:
                     scored_df, summary = score_reviews_dataframe(df_input)
                     st.session_state.scored_table = scored_df
                     st.session_state.scored_summary = summary
+                    st.session_state.genai_insights = generate_genai_insights(
+                        scored_df,
+                        summary,
+                        "Pasted Reviews",
+                    )
                 else:
                     st.session_state.scored_table = None
                     st.session_state.scored_summary = None
+                    st.session_state.genai_insights = None
                     st.warning("Paste at least one review line or upload a CSV file to see predictions.")
         elif not st.session_state.get("scored_summary"):
             st.info("Paste at least one review line or upload a CSV file to see predictions.")
@@ -535,7 +666,7 @@ else:
                 <div class="res-neutral">
                     <div class="res-label">₹ At-Risk Revenue Value</div>
                     <div class="res-num">{fmt_inr(at_risk_rev_val)}</div>
-                    <div class="res-caption">Order value across elevated-risk reviews</div>
+                    <div class="res-caption">Order value across elevated-risk rows</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -553,15 +684,17 @@ else:
             )
 
         st.markdown('<div class="sugg-box">', unsafe_allow_html=True)
-        st.markdown("**✦ Retention & Action Suggestions**")
-        if st.session_state.get("scored_summary"):
+        st.markdown("**✦ Retention & Action Suggestions (ML + Gen AI)**")
+        if st.session_state.get("genai_insights"):
+            st.markdown(st.session_state.genai_insights)
+        elif st.session_state.get("scored_summary"):
             st.write(
-                f"- **Escalate {fmt_int(high_val)} High-Urgency ticket(s) first:** Route negative/high-urgency complaints to priority support promptly.\n"
-                f"- **Protect {fmt_inr(at_risk_rev_val)} in At-Risk order value:** Target {fmt_int(at_risk_val)} elevated-risk accounts (avg churn risk {fmt_pct(avg_churn_val)}; goodwill pool {fmt_inr(total_goodwill_inr)}).\n"
-                f"- **Audit recurring friction drivers:** Inspect delivery delays, damaged arrivals, and quality defects below or in the Insights tab."
+                f"- **Escalate {fmt_int(high_val)} High-Urgency ticket(s) first:** Route critical items to priority support promptly.\n"
+                f"- **Protect {fmt_inr(at_risk_rev_val)} in At-Risk value:** Follow up with {fmt_int(at_risk_val)} elevated-risk rows "
+                f"(avg churn risk {fmt_pct(avg_churn_val)}; goodwill pool {fmt_inr(total_goodwill_inr)})."
             )
         else:
-            st.caption("No retention actions generated yet. Submit reviews or upload a CSV and click Analyze Reviews.")
+            st.caption("No retention actions generated yet. Paste reviews or upload a CSV and click Analyze Reviews.")
         st.markdown("</div>", unsafe_allow_html=True)
 
         if st.session_state.scored_table is not None and not st.session_state.scored_table.empty:
@@ -571,7 +704,7 @@ else:
             st.download_button(
                 label="Download Full Scored CSV",
                 data=csv_bytes,
-                file_name="retaincraft_scored_reviews.csv",
+                file_name="retaincraft_scored_output.csv",
                 mime="text/csv",
             )
 
